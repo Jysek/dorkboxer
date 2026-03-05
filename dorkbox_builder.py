@@ -27,8 +27,71 @@ MIN_BOXES = 2
 MAX_BOXES = 20
 HUGE_REQUEST_THRESHOLD = 100_000
 DEFAULT_BOX_NAMES = [
-    "Site Operator", "Title/URL Operator", "Keyword",
-    "File Type", "Filter", "Extra Param"
+    "Search Operator", "Keyword", "Page Type", "Page Parameters"
+]
+
+# ─────────────────────────────────────────────
+# Default Combination Templates
+# ─────────────────────────────────────────────
+# Each template defines how boxes are combined into dork strings.
+# Format uses box names in parentheses. "+" means concatenate (space-joined),
+# and each top-level group separated by space is a segment.
+# The template entries are tuples of segments; each segment is a list of box
+# references that are joined with no extra space (operator+value style).
+#
+# Template structure:
+#   name: display name
+#   description: tooltip text
+#   pattern: list of segment-groups, where each segment-group is a list of
+#            box-name references. Adjacent refs in a group are joined directly
+#            (e.g. operator:keyword), groups are space-separated.
+#   quoted: list of box names whose values should be wrapped in quotes
+
+DEFAULT_TEMPLATES = [
+    {
+        "name": "Template 1: Operator+Keyword  Operator+Param",
+        "short": "T1: Op+Kw  Op+Param",
+        "description": "(search operator)+(keyword)  (search operator)+(page parameter)\n"
+                       "Example: intitle:login  intitle:admin.php",
+        "segments": [
+            ["Search Operator", "Keyword"],
+            ["Search Operator", "Page Parameters"],
+        ],
+        "quoted": [],
+    },
+    {
+        "name": "Template 2: Site+Keyword  Filetype+PageType",
+        "short": "T2: Site+Kw  File+Page",
+        "description": "(site)+(keyword)  (filetype)+(page type)\n"
+                       "Example: site:example.com login  filetype:php admin",
+        "segments": [
+            ["Search Operator", "Keyword"],
+            ["Page Type", "Page Parameters"],
+        ],
+        "quoted": [],
+    },
+    {
+        "name": 'Template 3: \"Keyword\"  \"PageParam\"',
+        "short": 'T3: \"Kw\"  \"Param\"',
+        "description": '\"(keyword)\"  \"(page parameter)\"\n'
+                       'Example: \"login\"  \"admin.php\"',
+        "segments": [
+            ["Keyword"],
+            ["Page Parameters"],
+        ],
+        "quoted": ["Keyword", "Page Parameters"],
+    },
+    {
+        "name": 'Template 4: \"Keyword\"  Filetype+PageType',
+        "short": 'T4: \"Kw\"  File+Page',
+        "description": '\"(keyword)\"  (filetype)+(page type)\n'
+                       'Example: \"admin panel\"  filetype:php login',
+        "segments": [
+            ["Keyword"],
+            ["Page Type", "Page Parameters"],
+        ],
+        "quoted": ["Keyword"],
+    },
 ]
 
 # ─────────────────────────────────────────────
@@ -441,6 +504,126 @@ class CombinationEngine:
         random.shuffle(results)
         return results
 
+    @staticmethod
+    def calculate_total_template(template, box_map):
+        """Calculate total combos for a template pattern.
+
+        A template has 'segments' – each segment is a list of box-name
+        references whose entries are concatenated (operator+value style).
+        The segments themselves are space-joined to form a dork line.
+        The cartesian product is across ALL referenced boxes.
+        """
+        # Collect unique box entry-lists in segment order
+        seen = set()
+        entry_lists = []
+        for seg in template["segments"]:
+            for box_name in seg:
+                if box_name not in seen:
+                    entries = box_map.get(box_name, [])
+                    if not entries:
+                        return 0
+                    entry_lists.append(entries)
+                    seen.add(box_name)
+        return CombinationEngine.calculate_total(entry_lists) if entry_lists else 0
+
+    @staticmethod
+    def generate_all_template(template, box_map):
+        """Generate ALL combinations following a template pattern."""
+        quoted_boxes = set(template.get("quoted", []))
+
+        # Collect unique boxes in order and remember positions
+        seen = {}
+        ordered_names = []
+        entry_lists = []
+        for seg in template["segments"]:
+            for box_name in seg:
+                if box_name not in seen:
+                    entries = box_map.get(box_name, [])
+                    if not entries:
+                        return []
+                    seen[box_name] = len(ordered_names)
+                    ordered_names.append(box_name)
+                    entry_lists.append(entries)
+
+        if not entry_lists:
+            return []
+
+        results = []
+        for combo in itertools.product(*entry_lists):
+            # Build a lookup: box_name -> chosen value
+            chosen = {ordered_names[i]: combo[i] for i in range(len(combo))}
+            parts = []
+            for seg in template["segments"]:
+                seg_str = ""
+                for box_name in seg:
+                    val = chosen[box_name]
+                    if box_name in quoted_boxes:
+                        val = f'"{val}"'
+                    seg_str += val
+                parts.append(seg_str)
+            dork = " ".join(parts)
+            results.append(dork)
+        return results
+
+    @staticmethod
+    def generate_random_sample_template(template, box_map, count, progress_callback=None):
+        """Generate a random sample of unique combinations for a template."""
+        total = CombinationEngine.calculate_total_template(template, box_map)
+        if total == 0:
+            return []
+        if count >= total:
+            results = CombinationEngine.generate_all_template(template, box_map)
+            random.shuffle(results)
+            return results
+
+        # For manageable totals, generate all and sample
+        if total <= 500_000:
+            all_combos = CombinationEngine.generate_all_template(template, box_map)
+            random.shuffle(all_combos)
+            return all_combos[:count]
+
+        # For very large totals, use random index picking
+        quoted_boxes = set(template.get("quoted", []))
+        seen_order = {}
+        ordered_names = []
+        entry_lists = []
+        for seg in template["segments"]:
+            for box_name in seg:
+                if box_name not in seen_order:
+                    entries = box_map.get(box_name, [])
+                    if not entries:
+                        return []
+                    seen_order[box_name] = len(ordered_names)
+                    ordered_names.append(box_name)
+                    entry_lists.append(entries)
+
+        results_set = set()
+        attempts = 0
+        max_attempts = count * 10
+
+        while len(results_set) < count and attempts < max_attempts:
+            combo = tuple(random.choice(el) for el in entry_lists)
+            chosen = {ordered_names[i]: combo[i] for i in range(len(combo))}
+            parts = []
+            for seg in template["segments"]:
+                seg_str = ""
+                for box_name in seg:
+                    val = chosen[box_name]
+                    if box_name in quoted_boxes:
+                        val = f'"{val}"'
+                    seg_str += val
+                parts.append(seg_str)
+            dork = " ".join(parts)
+            if dork not in results_set:
+                results_set.add(dork)
+                if progress_callback and len(results_set) % 1000 == 0:
+                    progress_callback(len(results_set), count)
+            attempts += 1
+
+        results = list(results_set)
+        random.shuffle(results)
+        return results
+
 
 # ─────────────────────────────────────────────
 # Export Engine
@@ -548,6 +731,8 @@ class DorkBoxApp:
 
         self.generated_dorks = []
         self.filtered_dorks = []
+        self.templates = list(DEFAULT_TEMPLATES)  # mutable copy
+        self.active_template_idx = None  # None = cartesian product mode
 
         self._build_gui()
         self._init_default_boxes()
@@ -631,7 +816,70 @@ class DorkBoxApp:
 
         self.box_manager = BoxManager(self, self.box_scroll.inner_frame)
 
-        # Generation controls at bottom
+        # ── Combination Templates Section ──
+        tmpl_outer = tk.Frame(left, bg=COLORS["bg_card"], padx=12, pady=8,
+                              highlightthickness=1, highlightbackground=COLORS["border"])
+        tmpl_outer.pack(fill="x", pady=(8, 0))
+
+        tmpl_hdr = tk.Frame(tmpl_outer, bg=COLORS["bg_card"])
+        tmpl_hdr.pack(fill="x", pady=(0, 6))
+
+        tk.Label(
+            tmpl_hdr, text="\u2726 Combination Template",
+            font=FONTS["heading"], bg=COLORS["bg_card"], fg=COLORS["accent_yellow"]
+        ).pack(side="left")
+
+        self.tmpl_mode_label = tk.Label(
+            tmpl_hdr, text="Cartesian Product (all boxes)",
+            font=FONTS["small"], bg=COLORS["bg_card"], fg=COLORS["text_secondary"]
+        )
+        self.tmpl_mode_label.pack(side="right")
+
+        # Template radio buttons
+        self.tmpl_var = tk.IntVar(value=-1)  # -1 = cartesian product
+        tmpl_scroll_frame = tk.Frame(tmpl_outer, bg=COLORS["bg_card"])
+        tmpl_scroll_frame.pack(fill="x")
+
+        # "None" option = classic cartesian product
+        self.tmpl_radios = []
+        r_none = tk.Radiobutton(
+            tmpl_scroll_frame, text="None (Cartesian Product — all enabled boxes)",
+            variable=self.tmpl_var, value=-1,
+            command=self._on_template_changed,
+            bg=COLORS["bg_card"], fg=COLORS["text_primary"],
+            selectcolor=COLORS["input_bg"], activebackground=COLORS["bg_card"],
+            activeforeground=COLORS["text_primary"],
+            font=FONTS["small"], anchor="w", highlightthickness=0,
+        )
+        r_none.pack(fill="x", anchor="w")
+        ToolTip(r_none, "Classic mode: every enabled box entry is combined\nwith every other (full cartesian product).")
+        self.tmpl_radios.append(r_none)
+
+        for idx, tmpl in enumerate(self.templates):
+            r = tk.Radiobutton(
+                tmpl_scroll_frame, text=tmpl["short"],
+                variable=self.tmpl_var, value=idx,
+                command=self._on_template_changed,
+                bg=COLORS["bg_card"], fg=COLORS["text_primary"],
+                selectcolor=COLORS["input_bg"], activebackground=COLORS["bg_card"],
+                activeforeground=COLORS["text_primary"],
+                font=FONTS["small"], anchor="w", highlightthickness=0,
+            )
+            r.pack(fill="x", anchor="w")
+            ToolTip(r, tmpl["description"])
+            self.tmpl_radios.append(r)
+
+        # Template preview label
+        self.tmpl_preview = tk.Label(
+            tmpl_outer, text="", font=FONTS["mono_sm"],
+            bg=COLORS["input_bg"], fg=COLORS["accent_green"],
+            anchor="w", justify="left", padx=8, pady=4,
+            wraplength=480,
+        )
+        self.tmpl_preview.pack(fill="x", pady=(6, 0))
+        self._update_template_preview()
+
+        # ── Generation controls at bottom ──
         gen_frame = tk.Frame(left, bg=COLORS["bg_card"], padx=12, pady=10,
                              highlightthickness=1, highlightbackground=COLORS["border"])
         gen_frame.pack(fill="x", pady=(8, 0))
@@ -780,19 +1028,22 @@ class DorkBoxApp:
     # ── Default Setup ──
 
     def _init_default_boxes(self):
-        # Start with 3 default boxes
-        b1 = self.box_manager.add_box("Site Operator")
-        b2 = self.box_manager.add_box("Search Operator")
-        b3 = self.box_manager.add_box("Keyword")
+        # Start with 4 default boxes matching the template system
+        b1 = self.box_manager.add_box("Search Operator")
+        b2 = self.box_manager.add_box("Keyword")
+        b3 = self.box_manager.add_box("Page Type")
+        b4 = self.box_manager.add_box("Page Parameters")
 
         # Add example content
-        b1.text.insert("1.0", "site:example.com\nsite:test.com\nsite:target.org")
-        b2.text.insert("1.0", 'intitle:"login"\ninurl:"admin"\nintext:"password"')
-        b3.text.insert("1.0", "login\nadmin panel\ndashboard")
+        b1.text.insert("1.0", "site:example.com\nintitle:\ninurl:\nintext:")
+        b2.text.insert("1.0", "login\nadmin panel\ndashboard")
+        b3.text.insert("1.0", "filetype:php\nfiletype:asp\nfiletype:html")
+        b4.text.insert("1.0", "admin.php\nlogin.asp\nindex.html")
 
         b1._update_counter()
         b2._update_counter()
         b3._update_counter()
+        b4._update_counter()
 
     # ── Actions ──
 
@@ -800,16 +1051,64 @@ class DorkBoxApp:
         self.box_manager.add_box()
 
     def _set_max_count(self):
-        entry_lists = self.box_manager.get_active_entries()
-        total = CombinationEngine.calculate_total(entry_lists)
+        total = self._calc_current_total()
         self.gen_count_var.set(str(total))
+
+    # ── Template helpers ──
+
+    def _on_template_changed(self):
+        """Called when the user selects a different template radio."""
+        val = self.tmpl_var.get()
+        self.active_template_idx = val if val >= 0 else None
+        self._update_template_preview()
+        self.update_stats()
+
+    def _update_template_preview(self):
+        """Update the preview label under the template radios."""
+        idx = self.active_template_idx
+        if idx is None or idx < 0 or idx >= len(self.templates):
+            self.tmpl_preview.configure(
+                text="Mode: Full Cartesian Product of all enabled boxes"
+            )
+            self.tmpl_mode_label.configure(text="Cartesian Product (all boxes)")
+        else:
+            tmpl = self.templates[idx]
+            # Build a human-readable pattern string
+            parts = []
+            quoted = set(tmpl.get("quoted", []))
+            for seg in tmpl["segments"]:
+                seg_parts = []
+                for bn in seg:
+                    display = f"({bn})"
+                    if bn in quoted:
+                        display = f'\"({bn})\"'
+                    seg_parts.append(display)
+                parts.append("+".join(seg_parts))
+            pattern_str = "  ".join(parts)
+            self.tmpl_preview.configure(
+                text=f"Pattern: {pattern_str}\n{tmpl['description']}"
+            )
+            self.tmpl_mode_label.configure(text=tmpl["short"])
+
+    def _get_box_map(self):
+        """Return dict mapping box name -> list of entries for enabled boxes."""
+        return {b.name: b.get_entries() for b in self.box_manager.boxes if b.is_active()}
+
+    def _calc_current_total(self):
+        """Calculate total combos for the current mode/template."""
+        idx = self.active_template_idx
+        if idx is not None and 0 <= idx < len(self.templates):
+            box_map = self._get_box_map()
+            return CombinationEngine.calculate_total_template(self.templates[idx], box_map)
+        else:
+            entry_lists = self.box_manager.get_active_entries()
+            return CombinationEngine.calculate_total(entry_lists)
 
     def update_stats(self):
         """Update the statistics displays."""
         total_boxes = len(self.box_manager.boxes)
         active_boxes = len(self.box_manager.get_active_boxes())
-        entry_lists = self.box_manager.get_active_entries()
-        total_combos = CombinationEngine.calculate_total(entry_lists)
+        total_combos = self._calc_current_total()
 
         self.stat_boxes_label.configure(text=f"Boxes: {active_boxes}/{total_boxes}")
         self.box_count_label.configure(text=f"({total_boxes}/{MAX_BOXES})")
@@ -820,11 +1119,35 @@ class DorkBoxApp:
 
     def _generate(self):
         """Main generation action."""
-        # Validate
-        ok, msg = self.box_manager.validate_for_generation()
-        if not ok:
-            messagebox.showerror("Validation Error", msg)
-            return
+        idx = self.active_template_idx
+        use_template = idx is not None and 0 <= idx < len(self.templates)
+
+        if use_template:
+            # Template mode: validate that required boxes exist and have entries
+            tmpl = self.templates[idx]
+            box_map = self._get_box_map()
+            missing = []
+            for seg in tmpl["segments"]:
+                for bn in seg:
+                    if bn not in box_map or not box_map[bn]:
+                        missing.append(bn)
+            if missing:
+                names = ", ".join(sorted(set(missing)))
+                messagebox.showerror(
+                    "Template Error",
+                    f"The selected template requires these boxes to be enabled with entries:\n"
+                    f"{names}\n\nPlease add/enable them or choose a different template."
+                )
+                return
+            total = CombinationEngine.calculate_total_template(tmpl, box_map)
+        else:
+            # Cartesian product mode
+            ok, msg = self.box_manager.validate_for_generation()
+            if not ok:
+                messagebox.showerror("Validation Error", msg)
+                return
+            entry_lists = self.box_manager.get_active_entries()
+            total = CombinationEngine.calculate_total(entry_lists)
 
         # Parse requested count
         try:
@@ -834,9 +1157,6 @@ class DorkBoxApp:
         except ValueError:
             messagebox.showerror("Invalid Input", "Please enter a valid positive number.")
             return
-
-        entry_lists = self.box_manager.get_active_entries()
-        total = CombinationEngine.calculate_total(entry_lists)
 
         if total == 0:
             messagebox.showwarning("No Combinations", "No entries found in active boxes.")
@@ -874,11 +1194,25 @@ class DorkBoxApp:
             self.root.update_idletasks()
 
         try:
-            if requested >= total:
-                dorks = CombinationEngine.generate_all(entry_lists)
-                random.shuffle(dorks)
+            if use_template:
+                tmpl = self.templates[idx]
+                box_map = self._get_box_map()
+                if requested >= total:
+                    dorks = CombinationEngine.generate_all_template(tmpl, box_map)
+                    random.shuffle(dorks)
+                else:
+                    dorks = CombinationEngine.generate_random_sample_template(
+                        tmpl, box_map, requested, progress_cb
+                    )
             else:
-                dorks = CombinationEngine.generate_random_sample(entry_lists, requested, progress_cb)
+                entry_lists = self.box_manager.get_active_entries()
+                if requested >= total:
+                    dorks = CombinationEngine.generate_all(entry_lists)
+                    random.shuffle(dorks)
+                else:
+                    dorks = CombinationEngine.generate_random_sample(
+                        entry_lists, requested, progress_cb
+                    )
 
             # Remove duplicates (safety)
             seen = set()
