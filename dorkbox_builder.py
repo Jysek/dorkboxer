@@ -94,6 +94,12 @@ DEFAULT_TEMPLATES = [
     },
 ]
 
+# Special sentinel index for the "Mix All Templates" mode.
+# When selected, every standard template above is generated and the results
+# are merged, deduplicated, and shuffled to produce a rich variety of dork
+# patterns in a single run.
+MIX_ALL_TEMPLATE_IDX = -2
+
 # ─────────────────────────────────────────────
 # Color Palette & Styling
 # ─────────────────────────────────────────────
@@ -287,6 +293,8 @@ class OperatorBox:
         btn_frame = tk.Frame(hdr, bg=COLORS["bg_card"])
         btn_frame.pack(side="right")
 
+        make_small_button(btn_frame, "\U0001F4C2", self._load_from_file,
+                          style="yellow", tooltip="Load entries from TXT file").pack(side="left", padx=1)
         make_small_button(btn_frame, "\u25B2", lambda: self.manager.move_box(self, -1),
                           tooltip="Move Up").pack(side="left", padx=1)
         make_small_button(btn_frame, "\u25BC", lambda: self.manager.move_box(self, 1),
@@ -357,6 +365,51 @@ class OperatorBox:
         count = len(entries)
         self.counter_label.configure(text=f"{count} entr{'y' if count == 1 else 'ies'}")
         self.manager.on_box_changed()
+
+    def _load_from_file(self):
+        """Open a file dialog and load lines from a TXT file into this box."""
+        filepath = filedialog.askopenfilename(
+            title=f"Load entries into '{self.name}'",
+            filetypes=[("Text Files", "*.txt"), ("All Files", "*.*")],
+        )
+        if not filepath:
+            return
+        try:
+            with open(filepath, "r", encoding="utf-8") as f:
+                content = f.read()
+        except Exception as e:
+            messagebox.showerror("Load Error", f"Failed to read file:\n{e}")
+            return
+
+        lines = [line for line in content.splitlines() if line.strip()]
+        if not lines:
+            messagebox.showinfo("Empty File", "The selected file contains no non-empty lines.")
+            return
+
+        # Ask the user whether to replace or append
+        existing = self.text.get("1.0", "end-1c").strip()
+        mode = "replace"
+        if existing:
+            mode = messagebox.askquestion(
+                "Replace or Append?",
+                f"The box '{self.name}' already has content.\n\n"
+                f"Click YES to replace existing content.\n"
+                f"Click NO to append the new lines.",
+            )
+            # askquestion returns "yes" or "no"
+            mode = "replace" if mode == "yes" else "append"
+
+        if mode == "replace":
+            self.text.delete("1.0", "end")
+
+        # Ensure there's a newline separator when appending
+        if mode == "append":
+            current = self.text.get("1.0", "end-1c")
+            if current and not current.endswith("\n"):
+                self.text.insert("end", "\n")
+
+        self.text.insert("end", "\n".join(lines))
+        self._update_counter()
 
     def get_entries(self):
         """Return non-empty lines from this box (preserving internal spacing)."""
@@ -624,6 +677,88 @@ class CombinationEngine:
         random.shuffle(results)
         return results
 
+    # ── Mix All Templates helpers ──
+
+    @staticmethod
+    def calculate_total_mix_all(templates, box_map):
+        """Calculate the *upper bound* total across all templates (sum).
+
+        The real unique count may be lower due to overlap between templates,
+        but this gives the user a useful estimate.
+        """
+        total = 0
+        for tmpl in templates:
+            total += CombinationEngine.calculate_total_template(tmpl, box_map)
+        return total
+
+    @staticmethod
+    def generate_all_mix_all(templates, box_map, progress_callback=None):
+        """Generate dorks from ALL templates, merge & deduplicate."""
+        seen = set()
+        results = []
+        generated_so_far = 0
+        total_est = CombinationEngine.calculate_total_mix_all(templates, box_map)
+
+        for tmpl in templates:
+            dorks = CombinationEngine.generate_all_template(tmpl, box_map)
+            for d in dorks:
+                if d not in seen:
+                    seen.add(d)
+                    results.append(d)
+                generated_so_far += 1
+                if progress_callback and generated_so_far % 2000 == 0:
+                    progress_callback(generated_so_far, max(total_est, 1))
+        random.shuffle(results)
+        return results
+
+    @staticmethod
+    def generate_random_sample_mix_all(templates, box_map, count, progress_callback=None):
+        """Generate a random sample from the union of all templates."""
+        total_est = CombinationEngine.calculate_total_mix_all(templates, box_map)
+        if total_est == 0:
+            return []
+
+        # If requested count covers most of the space, generate everything
+        if count >= total_est:
+            return CombinationEngine.generate_all_mix_all(templates, box_map, progress_callback)
+
+        # Build a weighted list of eligible templates so we can sample
+        # proportionally from each.
+        eligible = []
+        for tmpl in templates:
+            t = CombinationEngine.calculate_total_template(tmpl, box_map)
+            if t > 0:
+                eligible.append((tmpl, t))
+        if not eligible:
+            return []
+
+        # Proportional allocation per template
+        grand_total = sum(t for _, t in eligible)
+        allocations = []
+        remaining = count
+        for i, (tmpl, t) in enumerate(eligible):
+            if i == len(eligible) - 1:
+                alloc = remaining  # give the rest to the last one
+            else:
+                alloc = max(1, round(count * t / grand_total))
+                alloc = min(alloc, remaining)
+            allocations.append(alloc)
+            remaining -= alloc
+
+        seen = set()
+        results = []
+        for (tmpl, t), alloc in zip(eligible, allocations):
+            dorks = CombinationEngine.generate_random_sample_template(
+                tmpl, box_map, alloc, progress_callback
+            )
+            for d in dorks:
+                if d not in seen:
+                    seen.add(d)
+                    results.append(d)
+
+        random.shuffle(results)
+        return results[:count]
+
 
 # ─────────────────────────────────────────────
 # Export Engine
@@ -836,14 +971,14 @@ class DorkBoxApp:
         self.tmpl_mode_label.pack(side="right")
 
         # Template radio buttons
-        self.tmpl_var = tk.IntVar(value=-1)  # -1 = cartesian product
+        self.tmpl_var = tk.IntVar(value=-1)  # -1 = cartesian product, -2 = mix all
         tmpl_scroll_frame = tk.Frame(tmpl_outer, bg=COLORS["bg_card"])
         tmpl_scroll_frame.pack(fill="x")
 
         # "None" option = classic cartesian product
         self.tmpl_radios = []
         r_none = tk.Radiobutton(
-            tmpl_scroll_frame, text="None (Cartesian Product — all enabled boxes)",
+            tmpl_scroll_frame, text="None (Cartesian Product \u2014 all enabled boxes)",
             variable=self.tmpl_var, value=-1,
             command=self._on_template_changed,
             bg=COLORS["bg_card"], fg=COLORS["text_primary"],
@@ -868,6 +1003,23 @@ class DorkBoxApp:
             r.pack(fill="x", anchor="w")
             ToolTip(r, tmpl["description"])
             self.tmpl_radios.append(r)
+
+        # "Mix All Templates" option
+        r_mix = tk.Radiobutton(
+            tmpl_scroll_frame,
+            text="\u2728 Mix All Templates",
+            variable=self.tmpl_var, value=MIX_ALL_TEMPLATE_IDX,
+            command=self._on_template_changed,
+            bg=COLORS["bg_card"], fg=COLORS["accent_yellow"],
+            selectcolor=COLORS["input_bg"], activebackground=COLORS["bg_card"],
+            activeforeground=COLORS["accent_yellow"],
+            font=("Segoe UI", 9, "bold"), anchor="w", highlightthickness=0,
+        )
+        r_mix.pack(fill="x", anchor="w")
+        ToolTip(r_mix, "Generates dorks using ALL templates above,\n"
+                       "merges and deduplicates the results.\n"
+                       "Produces the richest variety of dork patterns.")
+        self.tmpl_radios.append(r_mix)
 
         # Template preview label
         self.tmpl_preview = tk.Label(
@@ -1059,14 +1211,39 @@ class DorkBoxApp:
     def _on_template_changed(self):
         """Called when the user selects a different template radio."""
         val = self.tmpl_var.get()
-        self.active_template_idx = val if val >= 0 else None
+        if val == MIX_ALL_TEMPLATE_IDX:
+            self.active_template_idx = MIX_ALL_TEMPLATE_IDX
+        elif val >= 0:
+            self.active_template_idx = val
+        else:
+            self.active_template_idx = None
         self._update_template_preview()
         self.update_stats()
 
     def _update_template_preview(self):
         """Update the preview label under the template radios."""
         idx = self.active_template_idx
-        if idx is None or idx < 0 or idx >= len(self.templates):
+        if idx == MIX_ALL_TEMPLATE_IDX:
+            # Show a summary of all templates that will be used
+            lines = ["Mode: Mix All Templates \u2014 generates dorks from every template,"]
+            lines.append("merges and deduplicates for maximum variety.")
+            lines.append("")
+            for i, tmpl in enumerate(self.templates):
+                quoted = set(tmpl.get("quoted", []))
+                parts = []
+                for seg in tmpl["segments"]:
+                    seg_parts = []
+                    for bn in seg:
+                        display = f"({bn})"
+                        if bn in quoted:
+                            display = f'\"({bn})\"'
+                        seg_parts.append(display)
+                    parts.append("+".join(seg_parts))
+                pattern_str = "  ".join(parts)
+                lines.append(f"  T{i+1}: {pattern_str}")
+            self.tmpl_preview.configure(text="\n".join(lines))
+            self.tmpl_mode_label.configure(text="\u2728 Mix All Templates")
+        elif idx is None or idx < 0 or idx >= len(self.templates):
             self.tmpl_preview.configure(
                 text="Mode: Full Cartesian Product of all enabled boxes"
             )
@@ -1097,7 +1274,10 @@ class DorkBoxApp:
     def _calc_current_total(self):
         """Calculate total combos for the current mode/template."""
         idx = self.active_template_idx
-        if idx is not None and 0 <= idx < len(self.templates):
+        if idx == MIX_ALL_TEMPLATE_IDX:
+            box_map = self._get_box_map()
+            return CombinationEngine.calculate_total_mix_all(self.templates, box_map)
+        elif idx is not None and 0 <= idx < len(self.templates):
             box_map = self._get_box_map()
             return CombinationEngine.calculate_total_template(self.templates[idx], box_map)
         else:
@@ -1121,8 +1301,32 @@ class DorkBoxApp:
         """Main generation action."""
         idx = self.active_template_idx
         use_template = idx is not None and 0 <= idx < len(self.templates)
+        use_mix_all = idx == MIX_ALL_TEMPLATE_IDX
 
-        if use_template:
+        if use_mix_all:
+            # Mix All mode: check which templates can be satisfied
+            box_map = self._get_box_map()
+            usable = []
+            for tmpl in self.templates:
+                ok = True
+                for seg in tmpl["segments"]:
+                    for bn in seg:
+                        if bn not in box_map or not box_map[bn]:
+                            ok = False
+                            break
+                    if not ok:
+                        break
+                if ok:
+                    usable.append(tmpl)
+            if not usable:
+                messagebox.showerror(
+                    "Mix All Error",
+                    "None of the templates can be satisfied with the current boxes.\n"
+                    "Make sure at least one template has all its required boxes enabled with entries."
+                )
+                return
+            total = CombinationEngine.calculate_total_mix_all(usable, box_map)
+        elif use_template:
             # Template mode: validate that required boxes exist and have entries
             tmpl = self.templates[idx]
             box_map = self._get_box_map()
@@ -1194,7 +1398,28 @@ class DorkBoxApp:
             self.root.update_idletasks()
 
         try:
-            if use_template:
+            if use_mix_all:
+                box_map = self._get_box_map()
+                # Filter to only usable templates
+                usable = []
+                for tmpl in self.templates:
+                    ok = True
+                    for seg in tmpl["segments"]:
+                        for bn in seg:
+                            if bn not in box_map or not box_map[bn]:
+                                ok = False
+                                break
+                        if not ok:
+                            break
+                    if ok:
+                        usable.append(tmpl)
+                if requested >= total:
+                    dorks = CombinationEngine.generate_all_mix_all(usable, box_map, progress_cb)
+                else:
+                    dorks = CombinationEngine.generate_random_sample_mix_all(
+                        usable, box_map, requested, progress_cb
+                    )
+            elif use_template:
                 tmpl = self.templates[idx]
                 box_map = self._get_box_map()
                 if requested >= total:
