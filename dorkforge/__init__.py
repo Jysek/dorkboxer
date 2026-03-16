@@ -4,7 +4,8 @@ DorkForge - Professional Dork Query Generator
 
 A modular Flask web application for building and managing
 dork queries across multiple search engines (Google, Bing,
-DuckDuckGo, Yahoo) with correct syntax per engine.
+DuckDuckGo, Yahoo, Yandex, Baidu, Shodan, GitHub) with
+correct syntax per engine.
 
 Architecture:
     config/              - JSON configuration (operators, filetypes, rules)
@@ -22,5 +23,5 @@ Architecture:
     tests/               - Unit and integration tests
 """
 
-__version__ = "4.1.0"
+__version__ = "5.0.0"
 __app_name__ = "DorkForge"

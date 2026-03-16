@@ -2,14 +2,15 @@
 DorkForge - API Routes
 ========================
 
-Handles JSON API endpoints for generation, configuration, and export.
+Handles JSON API endpoints for generation, configuration, export,
+and combination counting.
 """
 
-import json
 import csv
 import io
+import json
 
-from flask import Blueprint, request, jsonify, Response
+from flask import Blueprint, Response, jsonify, request
 
 from dorkforge.engine import DorkConfig, DorkGenerator
 
@@ -56,9 +57,38 @@ def get_config():
     })
 
 
+@api_bp.route("/count", methods=["POST"])
+def count():
+    """Return estimated total combinations without generating dorks."""
+    data = request.get_json(silent=True)
+    if not data:
+        return jsonify({"error": "No JSON data provided.", "count": 0}), 400
+
+    keywords = data.get("keywords", [])
+    if isinstance(keywords, str):
+        keywords = [k.strip() for k in keywords.split("\n") if k.strip()]
+
+    generator = _get_generator()
+    total = generator.count_combinations(
+        engine_id=data.get("engine", "google"),
+        keywords=keywords,
+        selected_operators=data.get("operators", []),
+        selected_filetypes=data.get("filetypes", []),
+        custom_site=data.get("site", ""),
+        include_exclusions=data.get("exclusions", []),
+    )
+
+    return jsonify({"count": total})
+
+
 @api_bp.route("/generate", methods=["POST"])
 def generate():
-    """Generate dork queries from user input."""
+    """Generate dork queries from user input.
+
+    max_results behaviour:
+      - 0  -> generate ALL possible combinations (no artificial limit)
+      - >0 -> cap at that number
+    """
     data = request.get_json(silent=True)
     if not data:
         return jsonify({"error": "No JSON data provided."}), 400
@@ -71,10 +101,11 @@ def generate():
     use_quotes = data.get("use_quotes", False)
     exclusions = data.get("exclusions", [])
 
-    # Parse max_results safely
+    # Parse max_results: 0 = all, positive = custom limit
     try:
-        max_results = min(int(data.get("max_results", 100)), 10000)
-        max_results = max(max_results, 1)
+        max_results = int(data.get("max_results", 100))
+        if max_results < 0:
+            max_results = 0
     except (ValueError, TypeError):
         max_results = 100
 
@@ -124,7 +155,7 @@ def export():
             },
         )
 
-    elif fmt == "csv":
+    if fmt == "csv":
         output = io.StringIO()
         writer = csv.writer(output)
         writer.writerow(["#", "Dork Query", "Engine"])
@@ -138,7 +169,7 @@ def export():
             },
         )
 
-    elif fmt == "json":
+    if fmt == "json":
         from dorkforge import __version__
         export_data = {
             "generator": "DorkForge",

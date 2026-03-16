@@ -342,6 +342,8 @@ body {
     display: grid;
     grid-template-columns: 1fr 1fr;
     gap: 0.35rem;
+    max-height: 210px;
+    overflow-y: auto;
 }
 
 .engine-option {
@@ -957,6 +959,22 @@ button:focus-visible {
     .stat-chip { min-width: auto; padding: 0.3rem 0.5rem; }
     .results-header { padding: 0.5rem 0.75rem; }
     .results-footer { padding: 0.45rem 0.75rem; }
+}
+
+/* ── Form label hint ── */
+.form-label__hint {
+    font-weight: 400;
+    color: var(--text-muted);
+    font-size: 0.68rem;
+}
+
+/* ── Virtual scroll ── */
+.results-list--virtual {
+    overflow: visible;
+}
+
+.results-list--virtual .dork-row {
+    overflow: hidden;
 }
 
 /* ── Responsive: Mobile ── */
