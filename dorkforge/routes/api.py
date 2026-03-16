@@ -59,9 +59,9 @@ def get_config():
 @api_bp.route("/generate", methods=["POST"])
 def generate():
     """Generate dork queries from user input."""
-    data = request.get_json()
+    data = request.get_json(silent=True)
     if not data:
-        return jsonify({"error": "No data provided."}), 400
+        return jsonify({"error": "No JSON data provided."}), 400
 
     engine_id = data.get("engine", "google")
     keywords = data.get("keywords", [])
@@ -74,6 +74,7 @@ def generate():
     # Parse max_results safely
     try:
         max_results = min(int(data.get("max_results", 100)), 10000)
+        max_results = max(max_results, 1)
     except (ValueError, TypeError):
         max_results = 100
 
@@ -102,9 +103,9 @@ def generate():
 @api_bp.route("/export", methods=["POST"])
 def export():
     """Export dorks in TXT, CSV, or JSON format."""
-    data = request.get_json()
+    data = request.get_json(silent=True)
     if not data:
-        return jsonify({"error": "No data provided."}), 400
+        return jsonify({"error": "No JSON data provided."}), 400
 
     dorks = data.get("dorks", [])
     fmt = data.get("format", "txt")
@@ -138,9 +139,10 @@ def export():
         )
 
     elif fmt == "json":
+        from dorkforge import __version__
         export_data = {
             "generator": "DorkForge",
-            "version": "4.0.0",
+            "version": __version__,
             "engine": engine_name,
             "total": len(dorks),
             "dorks": dorks,

@@ -4,7 +4,7 @@ DorkForge v4.0 - Comprehensive Test Suite
 
 Tests:
     1. DorkConfig - Configuration loading and validation
-    2. DorkBuilder - Per-engine syntax generation
+    2. DorkBuilder - Per-engine syntax generation (incl. auto-quoting)
     3. DorkValidator - Rule-based validation
     4. DorkGenerator - End-to-end generation
     5. Multi-engine syntax correctness
@@ -128,16 +128,61 @@ class TestDorkBuilder(unittest.TestCase):
     def setUp(self):
         self.config = get_config()
 
-    def test_google_operator_term(self):
+    def test_google_operator_term_single_word(self):
         builder = DorkBuilder(self.config, "google")
         self.assertEqual(builder.build_operator_term("intitle", "login"), "intitle:login")
         self.assertEqual(builder.build_operator_term("filetype", "pdf"), "filetype:pdf")
         self.assertEqual(builder.build_operator_term("site", "example.com"), "site:example.com")
 
-    def test_bing_operator_term(self):
+    def test_google_operator_term_multi_word_auto_quotes(self):
+        """Multi-word values in text-search operators MUST be auto-quoted."""
+        builder = DorkBuilder(self.config, "google")
+        self.assertEqual(
+            builder.build_operator_term("intitle", "admin panel"),
+            'intitle:"admin panel"'
+        )
+        self.assertEqual(
+            builder.build_operator_term("inurl", "admin panel"),
+            'inurl:"admin panel"'
+        )
+        self.assertEqual(
+            builder.build_operator_term("intext", "sql error"),
+            'intext:"sql error"'
+        )
+
+    def test_site_never_quoted(self):
+        """site: values should never be quoted even if they have spaces."""
+        builder = DorkBuilder(self.config, "google")
+        # Domains don't have spaces, but just in case
+        self.assertEqual(
+            builder.build_operator_term("site", "example.com"),
+            "site:example.com"
+        )
+
+    def test_filetype_never_quoted(self):
+        """filetype: values should never be quoted."""
+        builder = DorkBuilder(self.config, "google")
+        self.assertEqual(builder.build_operator_term("filetype", "pdf"), "filetype:pdf")
+
+    def test_bing_operator_term_multi_word(self):
+        """Bing should also auto-quote multi-word operator values."""
         builder = DorkBuilder(self.config, "bing")
-        self.assertEqual(builder.build_operator_term("intitle", "admin"), "intitle:admin")
-        self.assertEqual(builder.build_operator_term("inbody", "password"), "inbody:password")
+        self.assertEqual(
+            builder.build_operator_term("intitle", "admin panel"),
+            'intitle:"admin panel"'
+        )
+        self.assertEqual(
+            builder.build_operator_term("inbody", "password reset"),
+            'inbody:"password reset"'
+        )
+
+    def test_duckduckgo_operator_term_multi_word(self):
+        """DuckDuckGo should also auto-quote multi-word operator values."""
+        builder = DorkBuilder(self.config, "duckduckgo")
+        self.assertEqual(
+            builder.build_operator_term("intitle", "admin panel"),
+            'intitle:"admin panel"'
+        )
 
     def test_google_join_terms_and(self):
         builder = DorkBuilder(self.config, "google")
@@ -206,6 +251,10 @@ class TestDorkValidator(unittest.TestCase):
 
     def test_valid_multi_operator(self):
         self.assertTrue(self.validator.is_valid("intitle:login filetype:php", "google"))
+
+    def test_valid_quoted_operator_value(self):
+        """Dork with quoted operator value should be valid."""
+        self.assertTrue(self.validator.is_valid('intitle:"admin panel"', "google"))
 
     def test_empty_dork_invalid(self):
         self.assertFalse(self.validator.is_valid("", "google"))
@@ -279,6 +328,7 @@ class TestDorkGenerator(unittest.TestCase):
             self.assertIn("site:example.com", d)
 
     def test_google_with_quotes(self):
+        """use_quotes should wrap BARE keywords in quotes."""
         result = self.gen.generate(
             engine_id="google",
             keywords=["admin panel"],
@@ -287,6 +337,58 @@ class TestDorkGenerator(unittest.TestCase):
         self.assertGreater(len(result["dorks"]), 0)
         for d in result["dorks"]:
             self.assertIn('"admin panel"', d)
+
+    def test_google_multi_word_operator_auto_quotes(self):
+        """Multi-word keyword inside intitle: must be auto-quoted."""
+        result = self.gen.generate(
+            engine_id="google",
+            keywords=["admin panel"],
+            selected_operators=["intitle"],
+            shuffle=False,
+        )
+        self.assertGreater(len(result["dorks"]), 0)
+        for d in result["dorks"]:
+            if "intitle:" in d:
+                self.assertIn('intitle:"admin panel"', d)
+
+    def test_google_multi_word_inurl_auto_quotes(self):
+        """Multi-word keyword inside inurl: must be auto-quoted."""
+        result = self.gen.generate(
+            engine_id="google",
+            keywords=["admin panel"],
+            selected_operators=["inurl"],
+            shuffle=False,
+        )
+        self.assertGreater(len(result["dorks"]), 0)
+        for d in result["dorks"]:
+            if "inurl:" in d:
+                self.assertIn('inurl:"admin panel"', d)
+
+    def test_bing_multi_word_auto_quotes(self):
+        """Bing multi-word in operator must be auto-quoted."""
+        result = self.gen.generate(
+            engine_id="bing",
+            keywords=["admin panel"],
+            selected_operators=["intitle"],
+            shuffle=False,
+        )
+        self.assertGreater(len(result["dorks"]), 0)
+        for d in result["dorks"]:
+            if "intitle:" in d:
+                self.assertIn('intitle:"admin panel"', d)
+
+    def test_single_word_not_quoted_in_operator(self):
+        """Single word values inside operators should NOT be quoted."""
+        result = self.gen.generate(
+            engine_id="google",
+            keywords=["login"],
+            selected_operators=["intitle"],
+            shuffle=False,
+        )
+        self.assertGreater(len(result["dorks"]), 0)
+        for d in result["dorks"]:
+            self.assertIn("intitle:login", d)
+            self.assertNotIn('"', d)
 
     def test_google_with_exclusions(self):
         result = self.gen.generate(
@@ -481,6 +583,22 @@ class TestMultiEngineSyntax(unittest.TestCase):
                 self.assertNotIn("  ", d, f"[{engine_id}] Double space: '{d}'")
                 self.assertGreater(len(d), 0, f"[{engine_id}] Empty dork")
 
+    def test_all_engines_multi_word_auto_quoted(self):
+        """All engines must auto-quote multi-word values in text operators."""
+        for engine_id in self.config.get_all_engine_ids():
+            result = self.gen.generate(
+                engine_id=engine_id,
+                keywords=["admin panel"],
+                selected_operators=["intitle"],
+                shuffle=False,
+            )
+            for d in result["dorks"]:
+                if "intitle:" in d:
+                    self.assertIn(
+                        'intitle:"admin panel"', d,
+                        f"[{engine_id}] Missing quotes in: '{d}'"
+                    )
+
 
 class TestDorkGeneratorEdgeCases(unittest.TestCase):
     """Test edge cases and error handling."""
@@ -568,6 +686,42 @@ class TestDorkGeneratorEdgeCases(unittest.TestCase):
         # Same set of dorks, different order (probabilistic - very unlikely same)
         self.assertEqual(set(result1["dorks"]), set(result2["dorks"]))
 
+    def test_use_quotes_does_not_double_quote_operator_values(self):
+        """When use_quotes=True, operator values use raw keywords, not double-quoted."""
+        result = self.gen.generate(
+            engine_id="google",
+            keywords=["admin panel"],
+            selected_operators=["intitle"],
+            use_quotes=True,
+            shuffle=False,
+        )
+        for d in result["dorks"]:
+            # Should have intitle:"admin panel" not intitle:""admin panel""
+            self.assertNotIn('""', d, f"Double quotes found: '{d}'")
+
+    def test_complex_combo_syntax(self):
+        """Test a complex combo produces correct syntax for Google."""
+        result = self.gen.generate(
+            engine_id="google",
+            keywords=["admin panel"],
+            selected_operators=["intitle"],
+            selected_filetypes=["php"],
+            custom_site="example.com",
+            include_exclusions=["facebook.com"],
+            shuffle=False,
+        )
+        self.assertGreater(len(result["dorks"]), 0)
+        for d in result["dorks"]:
+            if "intitle:" in d:
+                self.assertIn('intitle:"admin panel"', d)
+            if "filetype:" in d:
+                self.assertIn("filetype:php", d)
+            if "site:" in d:
+                self.assertIn("site:example.com", d)
+            self.assertIn("-facebook.com", d)
+            # Google uses space as AND, no " AND " keyword
+            self.assertNotIn(" AND ", d)
+
 
 class TestFlaskApp(unittest.TestCase):
     """Test Flask API endpoints."""
@@ -608,7 +762,6 @@ class TestFlaskApp(unittest.TestCase):
         resp = self.client.post("/api/generate",
                                 data="not json",
                                 content_type="text/plain")
-        # Flask returns 415 Unsupported Media Type for non-JSON content
         self.assertIn(resp.status_code, (400, 415))
 
     def test_api_generate_empty_keywords(self):
@@ -635,6 +788,19 @@ class TestFlaskApp(unittest.TestCase):
         data = resp.get_json()
         self.assertIn("dorks", data)
         self.assertEqual(data["engine"], "bing")
+
+    def test_api_generate_multi_word_auto_quoted(self):
+        """API should return dorks with auto-quoted multi-word operator values."""
+        resp = self.client.post("/api/generate", json={
+            "engine": "google",
+            "keywords": ["admin panel"],
+            "operators": ["intitle"],
+        })
+        data = resp.get_json()
+        self.assertGreater(len(data["dorks"]), 0)
+        for d in data["dorks"]:
+            if "intitle:" in d:
+                self.assertIn('intitle:"admin panel"', d)
 
     def test_api_export_txt(self):
         resp = self.client.post("/api/export", json={
@@ -686,7 +852,6 @@ class TestFlaskApp(unittest.TestCase):
         resp = self.client.post("/api/export",
                                 data="not json",
                                 content_type="text/plain")
-        # Flask returns 415 Unsupported Media Type for non-JSON content
         self.assertIn(resp.status_code, (400, 415))
 
 

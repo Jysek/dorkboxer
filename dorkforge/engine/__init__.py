@@ -11,18 +11,46 @@ Classes:
     DorkBuilder     - Builds syntactically correct operator:value terms
     DorkValidator   - Validates dorks against generation rules
     DorkGenerator   - Main generation engine combining all components
+
+Quoting Rules for Search Engine Dorks:
+    - site:         NEVER quoted  (site:example.com)
+    - filetype/ext: NEVER quoted  (filetype:pdf)
+    - intitle:      Quoted when value contains spaces (intitle:"admin panel")
+    - inurl:        Quoted when value contains spaces (inurl:"admin/login")
+    - intext:       Quoted when value contains spaces (intext:"error log")
+    - allintitle:   NEVER quoted  (allintitle: admin panel login)
+    - allinurl:     NEVER quoted  (allinurl: admin login page)
+    - allintext:    NEVER quoted  (allintext: admin panel login)
 """
 
 import json
 import os
 import random
 import itertools
-from typing import List, Dict, Optional, Set
+from typing import List, Dict, Optional, Set, Tuple
 
 
-# ──────────────────────────────────────────────────────
+# Operators whose values must NEVER be quoted (single-token or domain values)
+_NEVER_QUOTE_OPS = frozenset({
+    "site", "filetype", "ext", "cache", "related", "info",
+    "ip", "language", "location", "hostname", "feed", "hasfeed",
+})
+
+# Operators that accept space-separated word lists (NOT quoted as a phrase)
+_MULTI_WORD_OPS = frozenset({
+    "allintitle", "allinurl", "allintext",
+})
+
+# Operators whose values should be quoted when they contain spaces
+_QUOTE_ON_SPACE_OPS = frozenset({
+    "intitle", "inurl", "intext", "inbody", "inanchor",
+    "define", "contains", "prefer",
+})
+
+
+# ----------------------------------------------------------------
 # Configuration
-# ──────────────────────────────────────────────────────
+# ----------------------------------------------------------------
 
 class DorkConfig:
     """Loads and manages configuration for search engines, operators, and filetypes.
@@ -95,9 +123,9 @@ class DorkConfig:
         return engine.get("name", engine_id) if engine else engine_id
 
 
-# ──────────────────────────────────────────────────────
+# ----------------------------------------------------------------
 # Builder
-# ──────────────────────────────────────────────────────
+# ----------------------------------------------------------------
 
 class DorkBuilder:
     """Builds syntactically correct dork queries for a specific search engine.
@@ -114,19 +142,46 @@ class DorkBuilder:
         self.boolean_ops = self.engine.get("boolean_operators", {})
 
     def build_operator_term(self, operator_key: str, value: str) -> str:
-        """Build a single operator:value term with correct syntax.
+        """Build a single operator:value term with correct syntax and quoting.
+
+        Quoting rules:
+          - site, filetype, ext, cache, etc.: NEVER quote the value
+          - allintitle, allinurl, allintext: NEVER quote (space-separated lists)
+          - intitle, inurl, intext, inbody, etc.: Quote when value has spaces
+          - Unknown operators: return value as-is
 
         Examples:
-            build_operator_term("intitle", "login")  -> "intitle:login"
-            build_operator_term("filetype", "pdf")    -> "filetype:pdf"
+            build_operator_term("intitle", "login")        -> "intitle:login"
+            build_operator_term("intitle", "admin panel")  -> 'intitle:"admin panel"'
+            build_operator_term("site", "example.com")     -> "site:example.com"
+            build_operator_term("filetype", "pdf")         -> "filetype:pdf"
+            build_operator_term("allinurl", "admin login") -> "allinurl:admin login"
         """
         op_def = self.operators.get(operator_key)
         if op_def is None:
             return value
+
+        op_lower = operator_key.lower()
+
+        # Determine if value needs quoting
+        needs_quoting = False
+        if op_lower in _QUOTE_ON_SPACE_OPS and " " in value.strip():
+            # Only quote if not already quoted
+            stripped = value.strip()
+            if not (stripped.startswith('"') and stripped.endswith('"')):
+                needs_quoting = True
+
+        if needs_quoting:
+            quoted_value = f'"{value}"'
+            return op_def["syntax"].replace("{value}", quoted_value)
+
         return op_def["syntax"].replace("{value}", value)
 
     def quote_value(self, value: str) -> str:
-        """Wrap value in quotes using the engine's exact-match syntax."""
+        """Wrap value in quotes using the engine's exact-match syntax.
+
+        Used when the user explicitly requests exact match for keywords.
+        """
         exact_syntax = self.boolean_ops.get("EXACT", '"{value}"')
         if exact_syntax is None:
             return value
@@ -167,9 +222,9 @@ class DorkBuilder:
             return f"{stripped}{term}"
 
 
-# ──────────────────────────────────────────────────────
+# ----------------------------------------------------------------
 # Validator
-# ──────────────────────────────────────────────────────
+# ----------------------------------------------------------------
 
 class DorkValidator:
     """Validates generated dorks against configuration rules.
@@ -220,12 +275,17 @@ class DorkValidator:
         return True
 
     def _extract_operators(self, dork: str, engine_id: str) -> List[str]:
-        """Extract operator names present in a dork string."""
+        """Extract operator names present in a dork string.
+
+        Handles quoted values correctly by not splitting inside quotes.
+        """
         engine_ops = self.config.get_operators(engine_id)
         operators_found: List[str] = []
 
-        for part in dork.split():
-            clean = part.lower().strip('"').lstrip("(").rstrip(")")
+        # Parse tokens respecting quotes
+        tokens = self._tokenize(dork)
+        for token in tokens:
+            clean = token.lower().lstrip("-(").rstrip(")")
             if ":" in clean:
                 prefix = clean.split(":")[0]
                 if prefix in engine_ops:
@@ -233,10 +293,33 @@ class DorkValidator:
 
         return operators_found
 
+    @staticmethod
+    def _tokenize(dork: str) -> List[str]:
+        """Split dork into tokens respecting quoted strings."""
+        tokens: List[str] = []
+        current = ""
+        in_quotes = False
 
-# ──────────────────────────────────────────────────────
+        for ch in dork:
+            if ch == '"':
+                in_quotes = not in_quotes
+                current += ch
+            elif ch == " " and not in_quotes:
+                if current:
+                    tokens.append(current)
+                    current = ""
+            else:
+                current += ch
+
+        if current:
+            tokens.append(current)
+
+        return tokens
+
+
+# ----------------------------------------------------------------
 # Generator
-# ──────────────────────────────────────────────────────
+# ----------------------------------------------------------------
 
 class DorkGenerator:
     """Main dork generation engine.
@@ -282,7 +365,7 @@ class DorkGenerator:
             selected_operators: Operator keys to use (e.g. ["intitle", "inurl"]).
             selected_filetypes: File extensions to target (e.g. ["pdf", "php"]).
             custom_site:        Optional site: domain restriction.
-            use_quotes:         Wrap keywords in exact-match quotes.
+            use_quotes:         Wrap bare keywords in exact-match quotes.
             include_exclusions: Terms to negate with NOT/- operator.
             max_results:        Maximum dorks to return.
             shuffle:            Randomize output order.
@@ -295,11 +378,11 @@ class DorkGenerator:
         available_ops = self.config.get_operators(engine_id)
         warnings: List[str] = []
 
-        # ── Validate keywords ──
+        # -- Validate keywords --
         if not keywords:
             return self._empty_result(engine_id, ["No keywords provided."])
 
-        # ── Validate selected operators ──
+        # -- Validate selected operators --
         if selected_operators:
             valid_ops = [op for op in selected_operators if op in available_ops]
             invalid_ops = [op for op in selected_operators if op not in available_ops]
@@ -311,7 +394,7 @@ class DorkGenerator:
         else:
             selected_operators = []
 
-        # ── Validate filetypes ──
+        # -- Validate filetypes --
         available_filetypes = self.config.get_filetypes(engine_id)
         if selected_filetypes:
             valid_ft = [ft for ft in selected_filetypes if ft in available_filetypes]
@@ -324,28 +407,27 @@ class DorkGenerator:
         else:
             selected_filetypes = []
 
-        # ── Determine filetype operator ──
+        # -- Determine filetype operator --
         has_filetype_op = "filetype" in available_ops or "ext" in available_ops
         filetype_op_key = "filetype" if "filetype" in available_ops else "ext"
         if selected_filetypes and not has_filetype_op:
             warnings.append(f"Filetype operator not available for {engine_id}.")
             selected_filetypes = []
 
-        # ── Process keywords ──
+        # -- Process keywords --
+        # NOTE: Keywords are processed as-is here. Quoting for operators
+        # (e.g. intitle:"admin panel") is handled by build_operator_term().
+        # The use_quotes flag wraps BARE keywords only (without operator prefix).
         processed_keywords: List[str] = []
         for kw in keywords:
             kw = kw.strip()
-            if not kw:
-                continue
-            if use_quotes:
-                processed_keywords.append(builder.quote_value(kw))
-            else:
+            if kw:
                 processed_keywords.append(kw)
 
         if not processed_keywords:
             return self._empty_result(engine_id, ["No valid keywords after processing."])
 
-        # ── Build exclusion suffix ──
+        # -- Build exclusion suffix --
         exclusion_parts: List[str] = []
         if include_exclusions:
             for exc in include_exclusions:
@@ -354,14 +436,14 @@ class DorkGenerator:
                     exclusion_parts.append(builder.negate_term(exc))
         exclusion_suffix = " ".join(exclusion_parts)
 
-        # ── Build site prefix ──
+        # -- Build site prefix --
         site_prefix = ""
         if custom_site and custom_site.strip():
             site_op = available_ops.get("site")
             if site_op:
                 site_prefix = builder.build_operator_term("site", custom_site.strip())
 
-        # ── Generate combinations ──
+        # -- Generate combinations --
         all_dorks: List[str] = []
 
         if selected_operators and selected_filetypes:
@@ -382,9 +464,10 @@ class DorkGenerator:
                     dork = f"{dork} {exclusion_suffix}"
                 all_dorks.append(dork)
 
-            # Also: plain keyword + filetype:ext [+ site:]
+            # Also: keyword + filetype:ext [+ site:]
             for kw, ft in itertools.product(processed_keywords, selected_filetypes):
-                parts = [kw, builder.build_operator_term(filetype_op_key, ft)]
+                bare_kw = builder.quote_value(kw) if use_quotes else kw
+                parts = [bare_kw, builder.build_operator_term(filetype_op_key, ft)]
                 if site_prefix:
                     parts.append(site_prefix)
                 dork = builder.join_terms(parts)
@@ -404,7 +487,8 @@ class DorkGenerator:
 
         elif selected_filetypes:
             for kw, ft in itertools.product(processed_keywords, selected_filetypes):
-                parts = [kw, builder.build_operator_term(filetype_op_key, ft)]
+                bare_kw = builder.quote_value(kw) if use_quotes else kw
+                parts = [bare_kw, builder.build_operator_term(filetype_op_key, ft)]
                 if site_prefix:
                     parts.append(site_prefix)
                 dork = builder.join_terms(parts)
@@ -414,7 +498,8 @@ class DorkGenerator:
 
         else:
             for kw in processed_keywords:
-                parts = [kw]
+                bare_kw = builder.quote_value(kw) if use_quotes else kw
+                parts = [bare_kw]
                 if site_prefix:
                     parts.append(site_prefix)
                 dork = builder.join_terms(parts)
@@ -422,7 +507,7 @@ class DorkGenerator:
                     dork = f"{dork} {exclusion_suffix}"
                 all_dorks.append(dork)
 
-        # ── Deduplicate ──
+        # -- Deduplicate --
         seen: Set[str] = set()
         unique_dorks: List[str] = []
         for d in all_dorks:
@@ -433,7 +518,7 @@ class DorkGenerator:
 
         total_possible = len(unique_dorks)
 
-        # ── Validate ──
+        # -- Validate --
         valid_dorks: List[str] = []
         invalid_count = 0
         for d in unique_dorks:
@@ -445,7 +530,7 @@ class DorkGenerator:
         if invalid_count > 0:
             warnings.append(f"Filtered {invalid_count} invalid combinations.")
 
-        # ── Shuffle and limit ──
+        # -- Shuffle and limit --
         if shuffle:
             random.shuffle(valid_dorks)
 

@@ -22,5 +22,5 @@ Architecture:
     tests/               - Unit and integration tests
 """
 
-__version__ = "4.0.0"
+__version__ = "4.1.0"
 __app_name__ = "DorkForge"
