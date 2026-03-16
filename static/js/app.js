@@ -1,5 +1,5 @@
 /**
- * DorkForge v4.0 - Frontend Application
+ * DorkForge v4.1 - Frontend Application
  * ========================================
  * Handles UI interactions, API communication, panel resizing,
  * and result rendering for multi-engine dork generation.
@@ -8,18 +8,19 @@
 (function () {
     'use strict';
 
-    // ── State ──
+    // -- State --
     let currentEngine = 'google';
     let allDorks = [];
     let filteredDorks = [];
     let selectedRows = new Set();
     let engineConfig = null;
+    let sortAscending = true;
 
-    // ── DOM Helpers ──
+    // -- DOM Helpers --
     const $ = (sel) => document.querySelector(sel);
     const $$ = (sel) => document.querySelectorAll(sel);
 
-    // ── Cached DOM References ──
+    // -- Cached DOM References --
     const els = {};
 
     function cacheElements() {
@@ -36,11 +37,11 @@
             'configPanel', 'resultsPanel', 'resizeHandle',
         ];
         ids.forEach((id) => {
-            els[id] = $('#' + id);
+            els[id] = document.getElementById(id);
         });
     }
 
-    // ── Initialize ──
+    // -- Initialize --
     async function init() {
         cacheElements();
 
@@ -62,7 +63,7 @@
         updateCounts();
     }
 
-    // ── Engine Selector ──
+    // -- Engine Selector --
     function setupEngineSelector() {
         const options = $$('.engine-option');
         options.forEach((opt) => {
@@ -78,7 +79,7 @@
         });
     }
 
-    // ── Render Operators ──
+    // -- Render Operators --
     function renderOperators() {
         const eng = engineConfig?.engines?.[currentEngine];
         if (!eng || !els.operatorGrid) return;
@@ -105,7 +106,7 @@
         });
     }
 
-    // ── Render Filetypes ──
+    // -- Render Filetypes --
     function renderFiletypes() {
         const eng = engineConfig?.engines?.[currentEngine];
         if (!eng || !els.filetypeGrid) return;
@@ -130,7 +131,7 @@
         });
     }
 
-    // ── Event Bindings ──
+    // -- Event Bindings --
     function bindEvents() {
         // Generate
         els.generateBtn?.addEventListener('click', generate);
@@ -170,7 +171,6 @@
         // Search
         els.searchInput?.addEventListener('input', () => {
             applyFilter();
-            // Show/hide clear button
             if (els.searchClear) {
                 els.searchClear.style.display = els.searchInput.value ? 'block' : 'none';
             }
@@ -179,7 +179,7 @@
         // Search clear
         els.searchClear?.addEventListener('click', () => {
             if (els.searchInput) els.searchInput.value = '';
-            els.searchClear.style.display = 'none';
+            if (els.searchClear) els.searchClear.style.display = 'none';
             applyFilter();
         });
 
@@ -198,12 +198,10 @@
 
         // Keyboard shortcuts
         document.addEventListener('keydown', (e) => {
-            // Ctrl+Enter -> Generate
             if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
                 e.preventDefault();
                 generate();
             }
-            // Escape -> Clear search
             if (e.key === 'Escape' && document.activeElement === els.searchInput) {
                 els.searchInput.value = '';
                 if (els.searchClear) els.searchClear.style.display = 'none';
@@ -213,7 +211,7 @@
         });
     }
 
-    // ── Panel Resize ──
+    // -- Panel Resize --
     function setupPanelResize() {
         const handle = els.resizeHandle;
         const panel = els.configPanel;
@@ -250,7 +248,7 @@
         });
     }
 
-    // ── File Upload ──
+    // -- File Upload --
     function handleFileUpload(e) {
         const file = e.target.files?.[0];
         if (!file) return;
@@ -271,10 +269,11 @@
             toast('Failed to read file', 'error');
         };
         reader.readAsText(file);
+        // Reset input so same file can be uploaded again
         e.target.value = '';
     }
 
-    // ── Toggle All Chips ──
+    // -- Toggle All Chips --
     function toggleAll(grid, active) {
         if (!grid) return;
         grid.querySelectorAll('.chip').forEach((c) => {
@@ -289,7 +288,7 @@
         updateCounts();
     }
 
-    // ── Update Counts ──
+    // -- Update Counts --
     function updateCounts() {
         const keywords = getKeywords();
         if (els.keywordCount) els.keywordCount.textContent = keywords.length;
@@ -307,8 +306,7 @@
         let possible = 0;
 
         if (oLen > 0 && fLen > 0) {
-            // (ops * keywords * filetypes) + (keywords * filetypes) for plain keyword+ft combos
-            const nonFtOps = ops.filter(o => o !== 'filetype' && o !== 'ext').length;
+            const nonFtOps = ops.filter((o) => o !== 'filetype' && o !== 'ext').length;
             possible = (nonFtOps * kLen * fLen) + (kLen * fLen);
         } else if (oLen > 0) {
             possible = oLen * kLen;
@@ -321,7 +319,7 @@
         if (els.statPossibleVal) els.statPossibleVal.textContent = possible.toLocaleString();
     }
 
-    // ── Data Extractors ──
+    // -- Data Extractors --
     function getKeywords() {
         if (!els.keywordsInput) return [];
         return els.keywordsInput.value
@@ -342,7 +340,7 @@
             .map((c) => c.dataset.filetype);
     }
 
-    // ── Generate ──
+    // -- Generate --
     async function generate() {
         const keywords = getKeywords();
         if (keywords.length === 0) {
@@ -351,7 +349,7 @@
             return;
         }
 
-        const maxResultsVal = parseInt(els.maxResults?.value) || 100;
+        const maxResultsVal = parseInt(els.maxResults?.value, 10) || 100;
 
         const payload = {
             engine: currentEngine,
@@ -428,7 +426,7 @@
         }
     }
 
-    // ── Render Results ──
+    // -- Render Results --
     function renderResults() {
         if (els.searchInput) els.searchInput.value = '';
         if (els.searchClear) els.searchClear.style.display = 'none';
@@ -460,7 +458,7 @@
         }
     }
 
-    // ── Create Dork Row ──
+    // -- Create Dork Row --
     function createDorkRow(dork, num) {
         const row = document.createElement('div');
         row.className = 'dork-row';
@@ -481,7 +479,7 @@
         const copyEl = document.createElement('button');
         copyEl.type = 'button';
         copyEl.className = 'dork-row__copy';
-        copyEl.innerHTML = '\u{1F4CB}';
+        copyEl.textContent = '\u{1F4CB}';
         copyEl.title = 'Copy this dork';
         copyEl.setAttribute('aria-label', 'Copy dork to clipboard');
         copyEl.addEventListener('click', (e) => {
@@ -492,7 +490,7 @@
 
         // Row click for selection
         row.addEventListener('click', () => {
-            const idx = parseInt(row.dataset.index);
+            const idx = parseInt(row.dataset.index, 10);
             if (selectedRows.has(idx)) {
                 selectedRows.delete(idx);
                 row.classList.remove('dork-row--selected');
@@ -510,14 +508,28 @@
         return row;
     }
 
-    // ── Syntax Highlighting ──
+    // -- Syntax Highlighting --
     function highlightDork(dork) {
         let html = escapeHtml(dork);
 
-        // Highlight operators (word:value)
+        // Highlight operators with quoted values: operator:"value"
         html = html.replace(
-            /\b(site|intitle|allintitle|inurl|allinurl|intext|allintext|inbody|filetype|ext|cache|link|related|info|define|inanchor|feed|hasfeed|contains|ip|language|location|prefer|hostname):(\S+)/gi,
+            /\b(site|intitle|allintitle|inurl|allinurl|intext|allintext|inbody|filetype|ext|related|define|inanchor|feed|hasfeed|contains|ip|language|location|prefer|hostname):(&quot;[^&]*&quot;)/gi,
             (match, op, val) => {
+                const opLower = op.toLowerCase();
+                if (opLower === 'filetype' || opLower === 'ext') {
+                    return `<span class="op">${op}:</span><span class="ft">${val}</span>`;
+                }
+                return `<span class="op">${op}:</span><span class="qt">${val}</span>`;
+            }
+        );
+
+        // Highlight operators with unquoted values: operator:value
+        html = html.replace(
+            /\b(site|intitle|allintitle|inurl|allinurl|intext|allintext|inbody|filetype|ext|related|define|inanchor|feed|hasfeed|contains|ip|language|location|prefer|hostname):(\S+)/gi,
+            (match, op, val) => {
+                // Skip if already wrapped in a span (from previous regex)
+                if (match.includes('<span')) return match;
                 const opLower = op.toLowerCase();
                 if (opLower === 'filetype' || opLower === 'ext') {
                     return `<span class="op">${op}:</span><span class="ft">${val}</span>`;
@@ -526,19 +538,19 @@
             }
         );
 
-        // Highlight quoted strings
+        // Highlight standalone quoted strings (not preceded by operator:)
         html = html.replace(
-            /&quot;([^&]*)&quot;/g,
-            '<span class="qt">&quot;$1&quot;</span>'
+            /(?<![:\w])(&quot;[^&]*&quot;)/g,
+            '<span class="qt">$1</span>'
         );
 
-        // Highlight negations
+        // Highlight negations (prefix -)
         html = html.replace(
             /(^|\s)(-\S+)/g,
             '$1<span class="neg">$2</span>'
         );
 
-        // Highlight NOT keyword (for Bing/Yahoo)
+        // Highlight NOT keyword (for Bing)
         html = html.replace(
             /(^|\s)(NOT\s+\S+)/g,
             '$1<span class="neg">$2</span>'
@@ -547,7 +559,7 @@
         return html.trim();
     }
 
-    // ── Filter ──
+    // -- Filter --
     function applyFilter() {
         const term = els.searchInput?.value.trim().toLowerCase() || '';
 
@@ -558,7 +570,7 @@
         }
 
         selectedRows.clear();
-        renderResults();
+        renderFilteredResults();
         updateButtons();
 
         // Highlight search term in rendered results
@@ -573,11 +585,48 @@
         }
     }
 
-    // ── Sort / Shuffle ──
+    /**
+     * Render filtered results without clearing the search box.
+     */
+    function renderFilteredResults() {
+        if (filteredDorks.length === 0) {
+            if (els.resultsEmpty) els.resultsEmpty.style.display = 'flex';
+            if (els.resultsList) els.resultsList.style.display = 'none';
+            if (els.resultCount) els.resultCount.textContent = '0 dorks';
+            return;
+        }
+
+        if (els.resultsEmpty) els.resultsEmpty.style.display = 'none';
+        if (els.resultsList) els.resultsList.style.display = 'block';
+
+        const frag = document.createDocumentFragment();
+        filteredDorks.forEach((dork, idx) => {
+            frag.appendChild(createDorkRow(dork, idx + 1));
+        });
+
+        if (els.resultsList) {
+            els.resultsList.innerHTML = '';
+            els.resultsList.appendChild(frag);
+        }
+
+        if (els.resultCount) {
+            els.resultCount.textContent = `${filteredDorks.length.toLocaleString()} dorks`;
+        }
+    }
+
+    // -- Sort / Shuffle --
     function sortResults() {
-        filteredDorks.sort((a, b) => a.localeCompare(b));
+        if (sortAscending) {
+            filteredDorks.sort((a, b) => a.localeCompare(b));
+        } else {
+            filteredDorks.sort((a, b) => b.localeCompare(a));
+        }
+        sortAscending = !sortAscending;
+        if (els.sortBtn) {
+            els.sortBtn.textContent = sortAscending ? 'A-Z' : 'Z-A';
+        }
         selectedRows.clear();
-        renderResults();
+        renderFilteredResults();
         updateButtons();
     }
 
@@ -587,11 +636,11 @@
             [filteredDorks[i], filteredDorks[j]] = [filteredDorks[j], filteredDorks[i]];
         }
         selectedRows.clear();
-        renderResults();
+        renderFilteredResults();
         updateButtons();
     }
 
-    // ── Copy ──
+    // -- Copy --
     function copyAll() {
         if (filteredDorks.length === 0) return;
         copyToClipboard(filteredDorks.join('\n'));
@@ -623,7 +672,7 @@
         }
     }
 
-    // ── Export ──
+    // -- Export --
     async function exportDorks(format) {
         if (filteredDorks.length === 0) return;
 
@@ -659,7 +708,7 @@
         }
     }
 
-    // ── Update Buttons ──
+    // -- Update Buttons --
     function updateButtons() {
         const hasDorks = filteredDorks.length > 0;
         const hasSelected = selectedRows.size > 0;
@@ -671,8 +720,9 @@
         if (els.exportJsonBtn) els.exportJsonBtn.disabled = !hasDorks;
     }
 
-    // ── Toast ──
-    function toast(message, type = 'success') {
+    // -- Toast --
+    function toast(message, type) {
+        type = type || 'success';
         const existing = document.querySelector('.toast');
         if (existing) existing.remove();
 
@@ -690,16 +740,17 @@
         }, 2700);
     }
 
-    // ── Utilities ──
+    // -- Utilities --
     function escapeHtml(str) {
-        const map = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' };
-        return str.replace(/[&<>"']/g, (m) => map[m]);
+        const div = document.createElement('div');
+        div.appendChild(document.createTextNode(str));
+        return div.innerHTML;
     }
 
     function escapeRegex(str) {
         return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     }
 
-    // ── Boot ──
+    // -- Boot --
     document.addEventListener('DOMContentLoaded', init);
 })();
