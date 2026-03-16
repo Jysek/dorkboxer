@@ -7,3 +7,14 @@ dist/
 build/
 .eggs/
 *.log
+.env
+venv/
+.venv/
+*.sqlite3
+*.db
+node_modules/
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
