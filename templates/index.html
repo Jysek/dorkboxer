@@ -157,9 +157,20 @@
                             <span class="toggle__label">Exact match (quotes)</span>
                         </label>
                     </div>
-                    <div class="form-group">
-                        <label class="form-label" for="maxResults">Max Results</label>
-                        <input type="number" class="input input--sm" id="maxResults" value="100" min="1" max="10000">
+
+                    <!-- Generate All toggle -->
+                    <div class="form-row">
+                        <label class="toggle">
+                            <input type="checkbox" id="generateAll">
+                            <span class="toggle__slider"></span>
+                            <span class="toggle__label">Generate ALL combinations</span>
+                        </label>
+                    </div>
+
+                    <div class="form-group" id="maxResultsGroup">
+                        <label class="form-label" for="maxResults">Max Results <span class="form-label__hint">(0 = all)</span></label>
+                        <input type="number" class="input input--sm" id="maxResults" value="100" min="0" step="1">
+                        <p class="card__hint" id="maxResultsHint">Set to 0 or enable "Generate ALL" for no limit.</p>
                     </div>
                 </section>
             </div>
@@ -258,7 +269,7 @@
         <div class="loading-spinner">
             <div class="spinner"></div>
             <p>Generating dorks...</p>
-            <span class="loading-spinner__sub">This may take a moment for large queries</span>
+            <span class="loading-spinner__sub" id="loadingSubtext">This may take a moment for large queries</span>
         </div>
     </div>
 

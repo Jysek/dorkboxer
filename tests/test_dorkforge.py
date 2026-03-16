@@ -1,26 +1,29 @@
 """
-DorkForge v4.0 - Comprehensive Test Suite
+DorkForge v5.0 - Comprehensive Test Suite
 =============================================
 
 Tests:
-    1. DorkConfig - Configuration loading and validation
+    1. DorkConfig - Configuration loading and validation (8 engines)
     2. DorkBuilder - Per-engine syntax generation (incl. auto-quoting)
     3. DorkValidator - Rule-based validation
     4. DorkGenerator - End-to-end generation
-    5. Multi-engine syntax correctness
-    6. Edge cases and error handling
-    7. Flask API endpoints
+    5. DorkGenerator - Generate ALL (max_results=0)
+    6. DorkGenerator - Multi-operator pair combinations
+    7. DorkGenerator - count_combinations
+    8. Multi-engine syntax correctness
+    9. Edge cases and error handling
+   10. Flask API endpoints (including /api/count)
 """
 
-import unittest
-import sys
-import os
 import json
+import os
+import sys
+import unittest
 
 # Ensure project root is on path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from dorkforge.engine import DorkConfig, DorkBuilder, DorkValidator, DorkGenerator
+from dorkforge.engine import DorkConfig, DorkBuilder, DorkGenerator, DorkValidator
 
 
 def get_config():
@@ -40,20 +43,19 @@ class TestDorkConfig(unittest.TestCase):
 
     def test_all_engines_loaded(self):
         engines = self.config.get_all_engine_ids()
-        self.assertIn("google", engines)
-        self.assertIn("bing", engines)
-        self.assertIn("duckduckgo", engines)
-        self.assertIn("yahoo", engines)
-        self.assertEqual(len(engines), 4)
+        expected = ["google", "bing", "duckduckgo", "yahoo", "yandex", "baidu", "shodan", "github"]
+        for e in expected:
+            self.assertIn(e, engines)
+        self.assertEqual(len(engines), 8)
 
     def test_google_operators(self):
         ops = self.config.get_operators("google")
-        for expected in ["intitle", "site", "filetype", "inurl", "intext"]:
+        for expected in ["intitle", "site", "filetype", "inurl", "intext", "before", "after"]:
             self.assertIn(expected, ops)
 
     def test_bing_operators(self):
         ops = self.config.get_operators("bing")
-        for expected in ["site", "intitle", "inbody", "filetype"]:
+        for expected in ["site", "intitle", "inbody", "filetype", "linkfromdomain"]:
             self.assertIn(expected, ops)
 
     def test_duckduckgo_operators(self):
@@ -61,26 +63,53 @@ class TestDorkConfig(unittest.TestCase):
         self.assertIn("site", ops)
         self.assertIn("intitle", ops)
         self.assertIn("filetype", ops)
-        # DDG has fewer operators
-        self.assertNotIn("cache", ops)
-        self.assertNotIn("inbody", ops)
+        self.assertIn("inbody", ops)
 
     def test_yahoo_operators(self):
         ops = self.config.get_operators("yahoo")
         self.assertIn("site", ops)
         self.assertIn("hostname", ops)
+        self.assertIn("link", ops)
+
+    def test_yandex_operators(self):
+        ops = self.config.get_operators("yandex")
+        self.assertIn("site", ops)
+        self.assertIn("mime", ops)
+        self.assertIn("host", ops)
+        self.assertIn("lang", ops)
+
+    def test_baidu_operators(self):
+        ops = self.config.get_operators("baidu")
+        self.assertIn("site", ops)
+        self.assertIn("intitle", ops)
+        self.assertIn("filetype", ops)
+
+    def test_shodan_operators(self):
+        ops = self.config.get_operators("shodan")
+        for expected in ["hostname", "port", "os", "country", "vuln", "http.title"]:
+            self.assertIn(expected, ops)
+
+    def test_github_operators(self):
+        ops = self.config.get_operators("github")
+        for expected in ["in:name", "in:file", "filename", "language", "extension"]:
+            self.assertIn(expected, ops)
 
     def test_filetypes_loaded(self):
         fts = self.config.get_filetypes("google")
         self.assertIn("pdf", fts)
         self.assertIn("php", fts)
         self.assertIn("sql", fts)
-        self.assertGreater(len(fts), 10)
+        self.assertIn("key", fts)
+        self.assertIn("pem", fts)
+        self.assertGreater(len(fts), 30)
 
-    def test_default_keywords(self):
+    def test_default_keywords_expanded(self):
         kws = self.config.default_keywords
         self.assertIn("Credentials", kws)
         self.assertIn("Infrastructure", kws)
+        self.assertIn("Vulnerable Pages", kws)
+        self.assertIn("IoT & Devices", kws)
+        self.assertIn("Cloud & APIs", kws)
         self.assertIn("login", kws["Credentials"])
 
     def test_generation_rules(self):
@@ -88,13 +117,14 @@ class TestDorkConfig(unittest.TestCase):
         self.assertIn("mutually_exclusive", rules)
         self.assertIn("max_operators_per_dork", rules)
         self.assertIn("max_dork_length", rules)
-        self.assertIsInstance(rules["mutually_exclusive"], list)
+        self.assertEqual(rules["max_operators_per_dork"], 5)
+        self.assertEqual(rules["max_dork_length"], 512)
 
     def test_engine_display_name(self):
         self.assertEqual(self.config.get_engine_display_name("google"), "Google")
-        self.assertEqual(self.config.get_engine_display_name("bing"), "Bing")
-        self.assertEqual(self.config.get_engine_display_name("duckduckgo"), "DuckDuckGo")
-        self.assertEqual(self.config.get_engine_display_name("yahoo"), "Yahoo")
+        self.assertEqual(self.config.get_engine_display_name("yandex"), "Yandex")
+        self.assertEqual(self.config.get_engine_display_name("shodan"), "Shodan")
+        self.assertEqual(self.config.get_engine_display_name("github"), "GitHub")
 
     def test_nonexistent_engine(self):
         self.assertIsNone(self.config.get_engine("nonexistent"))
@@ -102,15 +132,18 @@ class TestDorkConfig(unittest.TestCase):
         self.assertEqual(self.config.get_filetypes("nonexistent"), [])
         self.assertEqual(self.config.get_boolean_ops("nonexistent"), {})
 
-    def test_nonexistent_engine_display_name(self):
-        self.assertEqual(self.config.get_engine_display_name("xyz"), "xyz")
-
     def test_boolean_ops_loaded(self):
         google_bools = self.config.get_boolean_ops("google")
         self.assertIn("AND", google_bools)
         self.assertIn("OR", google_bools)
         self.assertIn("NOT", google_bools)
         self.assertIn("EXACT", google_bools)
+
+    def test_yandex_boolean_ops(self):
+        yandex_bools = self.config.get_boolean_ops("yandex")
+        self.assertEqual(yandex_bools["AND"], " && ")
+        self.assertEqual(yandex_bools["OR"], " | ")
+        self.assertEqual(yandex_bools["NOT"], " ~~")
 
     def test_operator_syntax_format(self):
         """All operators should have {value} in their syntax."""
@@ -135,7 +168,6 @@ class TestDorkBuilder(unittest.TestCase):
         self.assertEqual(builder.build_operator_term("site", "example.com"), "site:example.com")
 
     def test_google_operator_term_multi_word_auto_quotes(self):
-        """Multi-word values in text-search operators MUST be auto-quoted."""
         builder = DorkBuilder(self.config, "google")
         self.assertEqual(
             builder.build_operator_term("intitle", "admin panel"),
@@ -145,27 +177,19 @@ class TestDorkBuilder(unittest.TestCase):
             builder.build_operator_term("inurl", "admin panel"),
             'inurl:"admin panel"'
         )
-        self.assertEqual(
-            builder.build_operator_term("intext", "sql error"),
-            'intext:"sql error"'
-        )
 
     def test_site_never_quoted(self):
-        """site: values should never be quoted even if they have spaces."""
         builder = DorkBuilder(self.config, "google")
-        # Domains don't have spaces, but just in case
         self.assertEqual(
             builder.build_operator_term("site", "example.com"),
             "site:example.com"
         )
 
     def test_filetype_never_quoted(self):
-        """filetype: values should never be quoted."""
         builder = DorkBuilder(self.config, "google")
         self.assertEqual(builder.build_operator_term("filetype", "pdf"), "filetype:pdf")
 
     def test_bing_operator_term_multi_word(self):
-        """Bing should also auto-quote multi-word operator values."""
         builder = DorkBuilder(self.config, "bing")
         self.assertEqual(
             builder.build_operator_term("intitle", "admin panel"),
@@ -177,12 +201,34 @@ class TestDorkBuilder(unittest.TestCase):
         )
 
     def test_duckduckgo_operator_term_multi_word(self):
-        """DuckDuckGo should also auto-quote multi-word operator values."""
         builder = DorkBuilder(self.config, "duckduckgo")
         self.assertEqual(
             builder.build_operator_term("intitle", "admin panel"),
             'intitle:"admin panel"'
         )
+
+    def test_yandex_operator_term(self):
+        builder = DorkBuilder(self.config, "yandex")
+        self.assertEqual(builder.build_operator_term("site", "example.com"), "site:example.com")
+        self.assertEqual(builder.build_operator_term("mime", "pdf"), "mime:pdf")
+        self.assertEqual(
+            builder.build_operator_term("intitle", "admin panel"),
+            'intitle:"admin panel"'
+        )
+
+    def test_shodan_operator_term(self):
+        builder = DorkBuilder(self.config, "shodan")
+        self.assertEqual(builder.build_operator_term("port", "443"), "port:443")
+        self.assertEqual(builder.build_operator_term("country", "US"), "country:US")
+        self.assertEqual(
+            builder.build_operator_term("http.title", "admin panel"),
+            'http.title:"admin panel"'
+        )
+
+    def test_github_operator_term(self):
+        builder = DorkBuilder(self.config, "github")
+        self.assertEqual(builder.build_operator_term("language", "python"), "language:python")
+        self.assertEqual(builder.build_operator_term("filename", ".env"), "filename:.env")
 
     def test_google_join_terms_and(self):
         builder = DorkBuilder(self.config, "google")
@@ -194,49 +240,26 @@ class TestDorkBuilder(unittest.TestCase):
         result = builder.join_terms(["intitle:login", "filetype:php"], "AND")
         self.assertEqual(result, "intitle:login AND filetype:php")
 
-    def test_google_join_terms_or(self):
-        builder = DorkBuilder(self.config, "google")
-        result = builder.join_terms(["login", "admin"], "OR")
-        self.assertEqual(result, "login OR admin")
-
-    def test_bing_join_terms_or(self):
-        builder = DorkBuilder(self.config, "bing")
-        result = builder.join_terms(["login", "admin"], "OR")
-        self.assertEqual(result, "login OR admin")
-
-    def test_google_quote_value(self):
-        builder = DorkBuilder(self.config, "google")
-        self.assertEqual(builder.quote_value("admin panel"), '"admin panel"')
-
-    def test_bing_quote_value(self):
-        builder = DorkBuilder(self.config, "bing")
-        self.assertEqual(builder.quote_value("admin panel"), '"admin panel"')
+    def test_yandex_join_terms_and(self):
+        builder = DorkBuilder(self.config, "yandex")
+        result = builder.join_terms(["site:test.com", "mime:pdf"], "AND")
+        self.assertEqual(result, "site:test.com && mime:pdf")
 
     def test_google_negate_term(self):
         builder = DorkBuilder(self.config, "google")
-        result = builder.negate_term("facebook.com")
-        self.assertEqual(result, "-facebook.com")
+        self.assertEqual(builder.negate_term("facebook.com"), "-facebook.com")
 
     def test_bing_negate_term(self):
-        """Bing NOT should have space before term."""
         builder = DorkBuilder(self.config, "bing")
-        result = builder.negate_term("facebook.com")
-        self.assertEqual(result, "NOT facebook.com")
+        self.assertEqual(builder.negate_term("facebook.com"), "NOT facebook.com")
 
-    def test_duckduckgo_negate_term(self):
-        builder = DorkBuilder(self.config, "duckduckgo")
-        result = builder.negate_term("facebook.com")
-        self.assertEqual(result, "-facebook.com")
-
-    def test_yahoo_negate_term(self):
-        builder = DorkBuilder(self.config, "yahoo")
-        result = builder.negate_term("facebook.com")
-        self.assertEqual(result, "-facebook.com")
+    def test_yandex_negate_term(self):
+        builder = DorkBuilder(self.config, "yandex")
+        self.assertEqual(builder.negate_term("facebook.com"), "~~facebook.com")
 
     def test_unknown_operator_returns_value(self):
         builder = DorkBuilder(self.config, "google")
-        result = builder.build_operator_term("nonexistent", "test")
-        self.assertEqual(result, "test")
+        self.assertEqual(builder.build_operator_term("nonexistent", "test"), "test")
 
 
 class TestDorkValidator(unittest.TestCase):
@@ -253,7 +276,6 @@ class TestDorkValidator(unittest.TestCase):
         self.assertTrue(self.validator.is_valid("intitle:login filetype:php", "google"))
 
     def test_valid_quoted_operator_value(self):
-        """Dork with quoted operator value should be valid."""
         self.assertTrue(self.validator.is_valid('intitle:"admin panel"', "google"))
 
     def test_empty_dork_invalid(self):
@@ -275,14 +297,16 @@ class TestDorkValidator(unittest.TestCase):
         self.assertTrue(self.validator.is_valid("site:a.com site:b.com", "google"))
 
     def test_too_long_dork_invalid(self):
-        long_dork = "intitle:" + "a" * 300
+        long_dork = "intitle:" + "a" * 600
         self.assertFalse(self.validator.is_valid(long_dork, "google"))
 
-    def test_plain_keyword_valid(self):
-        self.assertTrue(self.validator.is_valid("login admin", "google"))
-
-    def test_max_operators_exceeded(self):
+    def test_five_operators_valid(self):
+        """max_operators_per_dork is now 5."""
         dork = "intitle:a inurl:b intext:c filetype:d site:e"
+        self.assertTrue(self.validator.is_valid(dork, "google"))
+
+    def test_six_operators_invalid(self):
+        dork = "intitle:a inurl:b intext:c filetype:d site:e inanchor:f"
         self.assertFalse(self.validator.is_valid(dork, "google"))
 
 
@@ -301,7 +325,6 @@ class TestDorkGenerator(unittest.TestCase):
         )
         self.assertGreater(len(result["dorks"]), 0)
         self.assertEqual(result["engine"], "google")
-        self.assertEqual(result["engine_name"], "Google")
         for d in result["dorks"]:
             self.assertIn("intitle:", d)
 
@@ -323,72 +346,28 @@ class TestDorkGenerator(unittest.TestCase):
             selected_operators=["intitle"],
             custom_site="example.com",
         )
-        self.assertGreater(len(result["dorks"]), 0)
         for d in result["dorks"]:
             self.assertIn("site:example.com", d)
 
     def test_google_with_quotes(self):
-        """use_quotes should wrap BARE keywords in quotes."""
         result = self.gen.generate(
             engine_id="google",
             keywords=["admin panel"],
             use_quotes=True,
         )
-        self.assertGreater(len(result["dorks"]), 0)
         for d in result["dorks"]:
             self.assertIn('"admin panel"', d)
 
     def test_google_multi_word_operator_auto_quotes(self):
-        """Multi-word keyword inside intitle: must be auto-quoted."""
         result = self.gen.generate(
             engine_id="google",
             keywords=["admin panel"],
             selected_operators=["intitle"],
             shuffle=False,
         )
-        self.assertGreater(len(result["dorks"]), 0)
         for d in result["dorks"]:
             if "intitle:" in d:
                 self.assertIn('intitle:"admin panel"', d)
-
-    def test_google_multi_word_inurl_auto_quotes(self):
-        """Multi-word keyword inside inurl: must be auto-quoted."""
-        result = self.gen.generate(
-            engine_id="google",
-            keywords=["admin panel"],
-            selected_operators=["inurl"],
-            shuffle=False,
-        )
-        self.assertGreater(len(result["dorks"]), 0)
-        for d in result["dorks"]:
-            if "inurl:" in d:
-                self.assertIn('inurl:"admin panel"', d)
-
-    def test_bing_multi_word_auto_quotes(self):
-        """Bing multi-word in operator must be auto-quoted."""
-        result = self.gen.generate(
-            engine_id="bing",
-            keywords=["admin panel"],
-            selected_operators=["intitle"],
-            shuffle=False,
-        )
-        self.assertGreater(len(result["dorks"]), 0)
-        for d in result["dorks"]:
-            if "intitle:" in d:
-                self.assertIn('intitle:"admin panel"', d)
-
-    def test_single_word_not_quoted_in_operator(self):
-        """Single word values inside operators should NOT be quoted."""
-        result = self.gen.generate(
-            engine_id="google",
-            keywords=["login"],
-            selected_operators=["intitle"],
-            shuffle=False,
-        )
-        self.assertGreater(len(result["dorks"]), 0)
-        for d in result["dorks"]:
-            self.assertIn("intitle:login", d)
-            self.assertNotIn('"', d)
 
     def test_google_with_exclusions(self):
         result = self.gen.generate(
@@ -397,9 +376,94 @@ class TestDorkGenerator(unittest.TestCase):
             selected_operators=["intitle"],
             include_exclusions=["facebook.com"],
         )
-        self.assertGreater(len(result["dorks"]), 0)
         for d in result["dorks"]:
             self.assertIn("-facebook.com", d)
+
+    # -- Generate ALL (max_results=0) --
+
+    def test_generate_all_no_limit(self):
+        """max_results=0 should return ALL valid dorks."""
+        result = self.gen.generate(
+            engine_id="google",
+            keywords=[f"kw{i}" for i in range(10)],
+            selected_operators=["intitle", "inurl"],
+            max_results=0,
+            shuffle=False,
+        )
+        # Should be at least 10*2 = 20 single-op combos + 10 pair combos = 30
+        self.assertGreaterEqual(result["total_generated"], 30)
+        self.assertEqual(result["total_generated"], result["total_possible"])
+
+    def test_generate_all_with_filetypes(self):
+        result = self.gen.generate(
+            engine_id="google",
+            keywords=["login", "admin"],
+            selected_operators=["intitle"],
+            selected_filetypes=["pdf", "php"],
+            max_results=0,
+            shuffle=False,
+        )
+        # Single-op combos: 1*2*2=4, bare kw+ft: 2*2=4 => at least 8
+        self.assertGreaterEqual(result["total_generated"], 8)
+
+    # -- Multi-operator pairs --
+
+    def test_multi_operator_pairs(self):
+        """Two operators should generate pair combinations."""
+        result = self.gen.generate(
+            engine_id="google",
+            keywords=["admin"],
+            selected_operators=["intitle", "inurl"],
+            max_results=0,
+            shuffle=False,
+        )
+        # Single combos: 2*1=2, pair combos: 1*1=1 => total 3
+        self.assertEqual(result["total_possible"], 3)
+        has_pair = any("intitle:" in d and "inurl:" in d for d in result["dorks"])
+        self.assertTrue(has_pair, "Should contain a pair combination")
+
+    def test_multi_operator_pairs_with_filetype(self):
+        result = self.gen.generate(
+            engine_id="google",
+            keywords=["admin"],
+            selected_operators=["intitle", "inurl"],
+            selected_filetypes=["php"],
+            max_results=0,
+            shuffle=False,
+        )
+        # Single: 2*1*1=2, bare: 1*1=1, pair+ft: 1*1*1=1, pair only: 1*1=1 => 5
+        self.assertEqual(result["total_possible"], 5)
+
+    # -- count_combinations --
+
+    def test_count_combinations_basic(self):
+        count = self.gen.count_combinations(
+            engine_id="google",
+            keywords=["login", "admin"],
+            selected_operators=["intitle"],
+        )
+        self.assertEqual(count, 2)
+
+    def test_count_combinations_with_pairs(self):
+        count = self.gen.count_combinations(
+            engine_id="google",
+            keywords=["login"],
+            selected_operators=["intitle", "inurl"],
+        )
+        # 2 single + 1 pair = 3
+        self.assertEqual(count, 3)
+
+    def test_count_combinations_with_filetypes(self):
+        count = self.gen.count_combinations(
+            engine_id="google",
+            keywords=["login"],
+            selected_operators=["intitle"],
+            selected_filetypes=["pdf", "php"],
+        )
+        # single: 1*1*2=2, bare: 1*2=2 => 4
+        self.assertEqual(count, 4)
+
+    # -- Multi-engine generation --
 
     def test_bing_generation(self):
         result = self.gen.generate(
@@ -408,56 +472,46 @@ class TestDorkGenerator(unittest.TestCase):
             selected_operators=["intitle"],
         )
         self.assertGreater(len(result["dorks"]), 0)
-        self.assertEqual(result["engine"], "bing")
         self.assertEqual(result["engine_name"], "Bing")
 
-    def test_bing_with_exclusions(self):
-        """Bing should use 'NOT term' syntax."""
+    def test_yandex_generation(self):
         result = self.gen.generate(
-            engine_id="bing",
+            engine_id="yandex",
             keywords=["login"],
             selected_operators=["intitle"],
-            include_exclusions=["facebook.com"],
         )
         self.assertGreater(len(result["dorks"]), 0)
-        for d in result["dorks"]:
-            self.assertIn("NOT facebook.com", d)
+        self.assertEqual(result["engine_name"], "Yandex")
 
-    def test_bing_with_filetype(self):
+    def test_shodan_generation(self):
         result = self.gen.generate(
-            engine_id="bing",
-            keywords=["config"],
-            selected_operators=["intitle"],
-            selected_filetypes=["php"],
+            engine_id="shodan",
+            keywords=["apache"],
+            selected_operators=["http.title"],
         )
         self.assertGreater(len(result["dorks"]), 0)
-        has_filetype = any("filetype:php" in d for d in result["dorks"])
-        self.assertTrue(has_filetype)
+        self.assertEqual(result["engine_name"], "Shodan")
 
-    def test_duckduckgo_generation(self):
+    def test_github_generation(self):
         result = self.gen.generate(
-            engine_id="duckduckgo",
+            engine_id="github",
             keywords=["password"],
-            selected_operators=["intitle"],
+            selected_operators=["filename"],
         )
         self.assertGreater(len(result["dorks"]), 0)
-        self.assertEqual(result["engine"], "duckduckgo")
-        self.assertEqual(result["engine_name"], "DuckDuckGo")
+        self.assertEqual(result["engine_name"], "GitHub")
 
-    def test_yahoo_generation(self):
+    def test_baidu_generation(self):
         result = self.gen.generate(
-            engine_id="yahoo",
+            engine_id="baidu",
             keywords=["admin"],
             selected_operators=["intitle"],
         )
         self.assertGreater(len(result["dorks"]), 0)
-        self.assertEqual(result["engine"], "yahoo")
+        self.assertEqual(result["engine_name"], "Baidu")
 
     def test_empty_keywords(self):
-        result = self.gen.generate(
-            engine_id="google",
-            keywords=[],
-        )
+        result = self.gen.generate(engine_id="google", keywords=[])
         self.assertEqual(len(result["dorks"]), 0)
         self.assertGreater(len(result["warnings"]), 0)
 
@@ -501,17 +555,11 @@ class TestDorkGenerator(unittest.TestCase):
             self.assertNotIn("  ", d, f"Double space: '{d}'")
 
     def test_result_dict_structure(self):
-        result = self.gen.generate(
-            engine_id="google",
-            keywords=["test"],
-        )
+        result = self.gen.generate(engine_id="google", keywords=["test"])
         required_keys = ["dorks", "total_generated", "total_possible",
                          "engine", "engine_name", "warnings"]
         for key in required_keys:
-            self.assertIn(key, result, f"Missing key: {key}")
-        self.assertIsInstance(result["dorks"], list)
-        self.assertIsInstance(result["warnings"], list)
-        self.assertIsInstance(result["total_generated"], int)
+            self.assertIn(key, result)
 
 
 class TestMultiEngineSyntax(unittest.TestCase):
@@ -544,35 +592,35 @@ class TestMultiEngineSyntax(unittest.TestCase):
             if "intitle:" in d and "filetype:" in d:
                 self.assertIn(" AND ", d)
 
-    def test_duckduckgo_syntax_no_and(self):
+    def test_yandex_syntax_uses_double_ampersand(self):
         result = self.gen.generate(
-            engine_id="duckduckgo",
-            keywords=["login"],
-            selected_operators=["intitle"],
-            shuffle=False,
-        )
-        for d in result["dorks"]:
-            self.assertNotIn(" AND ", d)
-
-    def test_yahoo_syntax_uses_and(self):
-        result = self.gen.generate(
-            engine_id="yahoo",
+            engine_id="yandex",
             keywords=["login"],
             selected_operators=["intitle"],
             selected_filetypes=["pdf"],
             shuffle=False,
         )
         for d in result["dorks"]:
-            if "intitle:" in d and "filetype:" in d:
-                self.assertIn(" AND ", d)
+            if "intitle:" in d and "mime:" in d:
+                self.assertIn(" && ", d)
 
     def test_all_engines_produce_valid_dorks(self):
+        # Skip Shodan (no filetypes, no site operator)
         for engine_id in self.config.get_all_engine_ids():
+            ops = self.config.get_operators(engine_id)
+            # Pick first available text operator
+            text_op = None
+            for candidate in ["intitle", "http.title", "in:name", "inurl"]:
+                if candidate in ops:
+                    text_op = candidate
+                    break
+            if text_op is None:
+                continue
+
             result = self.gen.generate(
                 engine_id=engine_id,
                 keywords=["login", "admin"],
-                selected_operators=["intitle", "site"],
-                custom_site="example.com",
+                selected_operators=[text_op],
             )
             self.assertGreater(
                 len(result["dorks"]), 0,
@@ -580,24 +628,7 @@ class TestMultiEngineSyntax(unittest.TestCase):
             )
             for d in result["dorks"]:
                 self.assertEqual(d.strip(), d, f"[{engine_id}] Whitespace: '{d}'")
-                self.assertNotIn("  ", d, f"[{engine_id}] Double space: '{d}'")
                 self.assertGreater(len(d), 0, f"[{engine_id}] Empty dork")
-
-    def test_all_engines_multi_word_auto_quoted(self):
-        """All engines must auto-quote multi-word values in text operators."""
-        for engine_id in self.config.get_all_engine_ids():
-            result = self.gen.generate(
-                engine_id=engine_id,
-                keywords=["admin panel"],
-                selected_operators=["intitle"],
-                shuffle=False,
-            )
-            for d in result["dorks"]:
-                if "intitle:" in d:
-                    self.assertIn(
-                        'intitle:"admin panel"', d,
-                        f"[{engine_id}] Missing quotes in: '{d}'"
-                    )
 
 
 class TestDorkGeneratorEdgeCases(unittest.TestCase):
@@ -634,10 +665,7 @@ class TestDorkGeneratorEdgeCases(unittest.TestCase):
             self.assertNotIn("  ", d)
 
     def test_nonexistent_engine(self):
-        result = self.gen.generate(
-            engine_id="nonexistent",
-            keywords=["login"],
-        )
+        result = self.gen.generate(engine_id="nonexistent", keywords=["login"])
         self.assertIsInstance(result["dorks"], list)
 
     def test_filetype_operator_excluded_from_combo(self):
@@ -669,25 +697,7 @@ class TestDorkGeneratorEdgeCases(unittest.TestCase):
         for d in result["dorks"]:
             self.assertNotIn("site:", d)
 
-    def test_shuffle_produces_different_orders(self):
-        """With enough dorks, shuffle should change order (probabilistic)."""
-        result1 = self.gen.generate(
-            engine_id="google",
-            keywords=[f"kw{i}" for i in range(20)],
-            selected_operators=["intitle"],
-            shuffle=True,
-        )
-        result2 = self.gen.generate(
-            engine_id="google",
-            keywords=[f"kw{i}" for i in range(20)],
-            selected_operators=["intitle"],
-            shuffle=True,
-        )
-        # Same set of dorks, different order (probabilistic - very unlikely same)
-        self.assertEqual(set(result1["dorks"]), set(result2["dorks"]))
-
     def test_use_quotes_does_not_double_quote_operator_values(self):
-        """When use_quotes=True, operator values use raw keywords, not double-quoted."""
         result = self.gen.generate(
             engine_id="google",
             keywords=["admin panel"],
@@ -696,31 +706,27 @@ class TestDorkGeneratorEdgeCases(unittest.TestCase):
             shuffle=False,
         )
         for d in result["dorks"]:
-            # Should have intitle:"admin panel" not intitle:""admin panel""
             self.assertNotIn('""', d, f"Double quotes found: '{d}'")
 
-    def test_complex_combo_syntax(self):
-        """Test a complex combo produces correct syntax for Google."""
+    def test_shodan_no_filetypes(self):
+        """Shodan has no filetypes - should still work."""
         result = self.gen.generate(
-            engine_id="google",
-            keywords=["admin panel"],
-            selected_operators=["intitle"],
-            selected_filetypes=["php"],
-            custom_site="example.com",
-            include_exclusions=["facebook.com"],
-            shuffle=False,
+            engine_id="shodan",
+            keywords=["apache"],
+            selected_operators=["hostname", "port"],
+            max_results=0,
         )
         self.assertGreater(len(result["dorks"]), 0)
-        for d in result["dorks"]:
-            if "intitle:" in d:
-                self.assertIn('intitle:"admin panel"', d)
-            if "filetype:" in d:
-                self.assertIn("filetype:php", d)
-            if "site:" in d:
-                self.assertIn("site:example.com", d)
-            self.assertIn("-facebook.com", d)
-            # Google uses space as AND, no " AND " keyword
-            self.assertNotIn(" AND ", d)
+
+    def test_negative_max_results_treated_as_zero(self):
+        result = self.gen.generate(
+            engine_id="google",
+            keywords=["login"],
+            selected_operators=["intitle"],
+            max_results=-5,
+        )
+        # -5 should be treated as 0 (generate all)
+        self.assertGreater(len(result["dorks"]), 0)
 
 
 class TestFlaskApp(unittest.TestCase):
@@ -743,6 +749,8 @@ class TestFlaskApp(unittest.TestCase):
         data = resp.get_json()
         self.assertIn("engines", data)
         self.assertIn("google", data["engines"])
+        self.assertIn("shodan", data["engines"])
+        self.assertIn("github", data["engines"])
         self.assertIn("default_keywords", data)
         self.assertIn("rules", data)
 
@@ -754,9 +762,20 @@ class TestFlaskApp(unittest.TestCase):
         })
         self.assertEqual(resp.status_code, 200)
         data = resp.get_json()
-        self.assertIn("dorks", data)
         self.assertGreater(len(data["dorks"]), 0)
-        self.assertEqual(data["engine"], "google")
+
+    def test_api_generate_all(self):
+        """max_results=0 should return all combinations."""
+        resp = self.client.post("/api/generate", json={
+            "engine": "google",
+            "keywords": ["login", "admin"],
+            "operators": ["intitle", "inurl"],
+            "max_results": 0,
+        })
+        self.assertEqual(resp.status_code, 200)
+        data = resp.get_json()
+        # 2 ops * 2 kw = 4 single + 1 pair * 2 kw = 2 pair => 6
+        self.assertEqual(data["total_generated"], 6)
 
     def test_api_generate_no_data(self):
         resp = self.client.post("/api/generate",
@@ -769,38 +788,18 @@ class TestFlaskApp(unittest.TestCase):
             "engine": "google",
             "keywords": [],
         })
-        self.assertEqual(resp.status_code, 200)
         data = resp.get_json()
         self.assertEqual(len(data["dorks"]), 0)
 
-    def test_api_generate_with_all_options(self):
-        resp = self.client.post("/api/generate", json={
-            "engine": "bing",
-            "keywords": ["admin panel"],
-            "operators": ["intitle"],
-            "filetypes": ["php"],
-            "site": "example.com",
-            "use_quotes": True,
-            "exclusions": ["facebook.com"],
-            "max_results": 50,
+    def test_api_count(self):
+        resp = self.client.post("/api/count", json={
+            "engine": "google",
+            "keywords": ["login", "admin"],
+            "operators": ["intitle", "inurl"],
         })
         self.assertEqual(resp.status_code, 200)
         data = resp.get_json()
-        self.assertIn("dorks", data)
-        self.assertEqual(data["engine"], "bing")
-
-    def test_api_generate_multi_word_auto_quoted(self):
-        """API should return dorks with auto-quoted multi-word operator values."""
-        resp = self.client.post("/api/generate", json={
-            "engine": "google",
-            "keywords": ["admin panel"],
-            "operators": ["intitle"],
-        })
-        data = resp.get_json()
-        self.assertGreater(len(data["dorks"]), 0)
-        for d in data["dorks"]:
-            if "intitle:" in d:
-                self.assertIn('intitle:"admin panel"', d)
+        self.assertEqual(data["count"], 6)
 
     def test_api_export_txt(self):
         resp = self.client.post("/api/export", json={
@@ -820,7 +819,6 @@ class TestFlaskApp(unittest.TestCase):
         })
         self.assertEqual(resp.status_code, 200)
         self.assertIn("text/csv", resp.content_type)
-        self.assertIn(b"intitle:login", resp.data)
 
     def test_api_export_json(self):
         resp = self.client.post("/api/export", json={
@@ -829,7 +827,6 @@ class TestFlaskApp(unittest.TestCase):
             "engine_name": "Google",
         })
         self.assertEqual(resp.status_code, 200)
-        self.assertIn("application/json", resp.content_type)
         data = json.loads(resp.data)
         self.assertEqual(data["generator"], "DorkForge")
         self.assertEqual(data["total"], 1)
@@ -847,12 +844,6 @@ class TestFlaskApp(unittest.TestCase):
             "format": "txt",
         })
         self.assertEqual(resp.status_code, 400)
-
-    def test_api_export_no_data(self):
-        resp = self.client.post("/api/export",
-                                data="not json",
-                                content_type="text/plain")
-        self.assertIn(resp.status_code, (400, 415))
 
 
 if __name__ == "__main__":

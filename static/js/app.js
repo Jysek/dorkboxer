@@ -1,12 +1,18 @@
 /**
- * DorkForge v4.1 - Frontend Application
+ * DorkForge v5.0 - Frontend Application
  * ========================================
  * Handles UI interactions, API communication, panel resizing,
- * and result rendering for multi-engine dork generation.
+ * virtual rendering for large result sets, and result management
+ * for multi-engine dork generation.
  */
 
 (function () {
     'use strict';
+
+    // -- Constants --
+    const VIRTUAL_ROW_HEIGHT = 32;
+    const VIRTUAL_OVERSCAN = 20;
+    const RENDER_CHUNK_LIMIT = 5000;
 
     // -- State --
     let currentEngine = 'google';
@@ -15,6 +21,7 @@
     let selectedRows = new Set();
     let engineConfig = null;
     let sortAscending = true;
+    let useVirtualScroll = false;
 
     // -- DOM Helpers --
     const $ = (sel) => document.querySelector(sel);
@@ -27,14 +34,16 @@
         const ids = [
             'engineSelector', 'keywordsInput', 'keywordFileUpload', 'clearKeywords',
             'operatorGrid', 'filetypeGrid', 'siteInput', 'exclusionsInput',
-            'useQuotes', 'maxResults', 'generateBtn', 'searchInput', 'searchClear',
+            'useQuotes', 'generateAll', 'maxResults', 'maxResultsGroup',
+            'maxResultsHint', 'generateBtn', 'searchInput', 'searchClear',
             'sortBtn', 'shuffleBtn', 'resultsEmpty', 'resultsList', 'resultCount',
             'warningsContainer', 'copyAllBtn', 'copySelectedBtn',
             'exportTxtBtn', 'exportCsvBtn', 'exportJsonBtn',
-            'loadingOverlay', 'statPossibleVal', 'statGeneratedVal',
+            'loadingOverlay', 'loadingSubtext',
+            'statPossibleVal', 'statGeneratedVal',
             'keywordCount', 'operatorCount', 'filetypeCount',
             'selectAllOps', 'deselectAllOps', 'selectAllFt', 'deselectAllFt',
-            'configPanel', 'resultsPanel', 'resizeHandle',
+            'configPanel', 'resultsPanel', 'resizeHandle', 'resultsBody',
         ];
         ids.forEach((id) => {
             els[id] = document.getElementById(id);
@@ -61,6 +70,7 @@
         bindEvents();
         setupPanelResize();
         updateCounts();
+        syncGenerateAllUI();
     }
 
     // -- Engine Selector --
@@ -168,6 +178,9 @@
         els.selectAllFt?.addEventListener('click', () => toggleAll(els.filetypeGrid, true));
         els.deselectAllFt?.addEventListener('click', () => toggleAll(els.filetypeGrid, false));
 
+        // Generate All toggle
+        els.generateAll?.addEventListener('change', syncGenerateAllUI);
+
         // Search
         els.searchInput?.addEventListener('input', () => {
             applyFilter();
@@ -209,6 +222,20 @@
                 els.searchInput.blur();
             }
         });
+    }
+
+    // -- Generate All UI sync --
+    function syncGenerateAllUI() {
+        const checked = els.generateAll?.checked || false;
+        if (els.maxResults) {
+            els.maxResults.disabled = checked;
+            if (checked) {
+                els.maxResults.dataset.prevValue = els.maxResults.value;
+                els.maxResults.value = '0';
+            } else {
+                els.maxResults.value = els.maxResults.dataset.prevValue || '100';
+            }
+        }
     }
 
     // -- Panel Resize --
@@ -265,11 +292,8 @@
             updateCounts();
             toast(`Loaded ${lines.length} keywords from file`);
         };
-        reader.onerror = () => {
-            toast('Failed to read file', 'error');
-        };
+        reader.onerror = () => toast('Failed to read file', 'error');
         reader.readAsText(file);
-        // Reset input so same file can be uploaded again
         e.target.value = '';
     }
 
@@ -299,21 +323,31 @@
         const fts = getSelectedFiletypes();
         if (els.filetypeCount) els.filetypeCount.textContent = fts.length;
 
-        // Estimate possible combinations
+        // Estimate possible combinations (matches backend logic)
         const kLen = keywords.length;
-        const oLen = ops.length;
+        const nonFtOps = ops.filter((o) => o !== 'filetype' && o !== 'ext' && o !== 'mime');
+        const oLen = nonFtOps.length;
         const fLen = fts.length;
         let possible = 0;
 
         if (oLen > 0 && fLen > 0) {
-            const nonFtOps = ops.filter((o) => o !== 'filetype' && o !== 'ext').length;
-            possible = (nonFtOps * kLen * fLen) + (kLen * fLen);
+            possible += oLen * kLen * fLen;       // single op + kw + ft
+            possible += kLen * fLen;              // bare kw + ft
+            if (oLen >= 2) {
+                const pairs = oLen * (oLen - 1) / 2;
+                possible += pairs * kLen;          // op pair + kw
+                possible += pairs * kLen * fLen;   // op pair + kw + ft
+            }
         } else if (oLen > 0) {
-            possible = oLen * kLen;
+            possible += oLen * kLen;
+            if (oLen >= 2) {
+                const pairs = oLen * (oLen - 1) / 2;
+                possible += pairs * kLen;
+            }
         } else if (fLen > 0) {
-            possible = kLen * fLen;
+            possible += kLen * fLen;
         } else {
-            possible = kLen;
+            possible += kLen;
         }
 
         if (els.statPossibleVal) els.statPossibleVal.textContent = possible.toLocaleString();
@@ -349,7 +383,10 @@
             return;
         }
 
-        const maxResultsVal = parseInt(els.maxResults?.value, 10) || 100;
+        const generateAllChecked = els.generateAll?.checked || false;
+        let maxResultsVal = parseInt(els.maxResults?.value, 10);
+        if (isNaN(maxResultsVal) || maxResultsVal < 0) maxResultsVal = 100;
+        if (generateAllChecked) maxResultsVal = 0;
 
         const payload = {
             engine: currentEngine,
@@ -366,6 +403,11 @@
         };
 
         if (els.loadingOverlay) els.loadingOverlay.style.display = 'flex';
+        if (els.loadingSubtext) {
+            els.loadingSubtext.textContent = maxResultsVal === 0
+                ? 'Generating ALL combinations - this may take a moment...'
+                : 'This may take a moment for large queries';
+        }
         if (els.generateBtn) els.generateBtn.disabled = true;
 
         try {
@@ -375,9 +417,7 @@
                 body: JSON.stringify(payload),
             });
 
-            if (!resp.ok) {
-                throw new Error(`Server error (HTTP ${resp.status})`);
-            }
+            if (!resp.ok) throw new Error(`Server error (HTTP ${resp.status})`);
 
             const result = await resp.json();
 
@@ -389,6 +429,9 @@
             allDorks = result.dorks || [];
             filteredDorks = [...allDorks];
             selectedRows.clear();
+
+            // Decide rendering strategy based on result size
+            useVirtualScroll = filteredDorks.length > RENDER_CHUNK_LIMIT;
 
             // Update stats
             if (els.statGeneratedVal) {
@@ -430,7 +473,11 @@
     function renderResults() {
         if (els.searchInput) els.searchInput.value = '';
         if (els.searchClear) els.searchClear.style.display = 'none';
+        renderFilteredResults();
+    }
 
+    // -- Render Filtered Results --
+    function renderFilteredResults() {
         if (filteredDorks.length === 0) {
             if (els.resultsEmpty) els.resultsEmpty.style.display = 'flex';
             if (els.resultsList) els.resultsList.style.display = 'none';
@@ -441,21 +488,87 @@
         if (els.resultsEmpty) els.resultsEmpty.style.display = 'none';
         if (els.resultsList) els.resultsList.style.display = 'block';
 
-        // Use DocumentFragment for performance
-        const frag = document.createDocumentFragment();
-
-        filteredDorks.forEach((dork, idx) => {
-            frag.appendChild(createDorkRow(dork, idx + 1));
-        });
-
-        if (els.resultsList) {
-            els.resultsList.innerHTML = '';
-            els.resultsList.appendChild(frag);
+        if (useVirtualScroll) {
+            renderVirtual();
+        } else {
+            renderDirect();
         }
 
         if (els.resultCount) {
             els.resultCount.textContent = `${filteredDorks.length.toLocaleString()} dorks`;
         }
+    }
+
+    // -- Direct DOM rendering (for manageable sizes) --
+    function renderDirect() {
+        const frag = document.createDocumentFragment();
+        filteredDorks.forEach((dork, idx) => {
+            frag.appendChild(createDorkRow(dork, idx + 1));
+        });
+        if (els.resultsList) {
+            els.resultsList.innerHTML = '';
+            els.resultsList.className = 'results-list';
+            els.resultsList.appendChild(frag);
+        }
+        // Remove any prior virtual scroll listener
+        if (els.resultsBody) {
+            els.resultsBody.onscroll = null;
+        }
+    }
+
+    // -- Virtual scroll rendering (for large lists) --
+    function renderVirtual() {
+        if (!els.resultsList || !els.resultsBody) return;
+
+        els.resultsList.innerHTML = '';
+        els.resultsList.className = 'results-list results-list--virtual';
+
+        const totalHeight = filteredDorks.length * VIRTUAL_ROW_HEIGHT;
+        els.resultsList.style.height = totalHeight + 'px';
+        els.resultsList.style.position = 'relative';
+
+        const renderVisibleRows = () => {
+            const scrollTop = els.resultsBody.scrollTop;
+            const viewHeight = els.resultsBody.clientHeight;
+
+            const startIdx = Math.max(0, Math.floor(scrollTop / VIRTUAL_ROW_HEIGHT) - VIRTUAL_OVERSCAN);
+            const endIdx = Math.min(
+                filteredDorks.length,
+                Math.ceil((scrollTop + viewHeight) / VIRTUAL_ROW_HEIGHT) + VIRTUAL_OVERSCAN
+            );
+
+            // Remove out-of-view rows
+            const existing = els.resultsList.querySelectorAll('.dork-row');
+            existing.forEach((row) => {
+                const rowIdx = parseInt(row.dataset.virtualIndex, 10);
+                if (rowIdx < startIdx || rowIdx >= endIdx) {
+                    row.remove();
+                }
+            });
+
+            // Add new visible rows
+            const existingIndices = new Set();
+            els.resultsList.querySelectorAll('.dork-row').forEach((row) => {
+                existingIndices.add(parseInt(row.dataset.virtualIndex, 10));
+            });
+
+            const frag = document.createDocumentFragment();
+            for (let i = startIdx; i < endIdx; i++) {
+                if (existingIndices.has(i)) continue;
+                const row = createDorkRow(filteredDorks[i], i + 1);
+                row.style.position = 'absolute';
+                row.style.top = (i * VIRTUAL_ROW_HEIGHT) + 'px';
+                row.style.left = '0';
+                row.style.right = '0';
+                row.style.height = VIRTUAL_ROW_HEIGHT + 'px';
+                row.dataset.virtualIndex = i;
+                frag.appendChild(row);
+            }
+            els.resultsList.appendChild(frag);
+        };
+
+        renderVisibleRows();
+        els.resultsBody.onscroll = renderVisibleRows;
     }
 
     // -- Create Dork Row --
@@ -465,17 +578,14 @@
         row.dataset.index = num - 1;
         row.setAttribute('role', 'row');
 
-        // Line number
         const numEl = document.createElement('div');
         numEl.className = 'dork-row__num';
         numEl.textContent = num;
 
-        // Dork text with syntax highlighting
         const textEl = document.createElement('div');
         textEl.className = 'dork-row__text';
         textEl.innerHTML = highlightDork(dork);
 
-        // Copy button
         const copyEl = document.createElement('button');
         copyEl.type = 'button';
         copyEl.className = 'dork-row__copy';
@@ -488,7 +598,6 @@
             toast('Copied to clipboard');
         });
 
-        // Row click for selection
         row.addEventListener('click', () => {
             const idx = parseInt(row.dataset.index, 10);
             if (selectedRows.has(idx)) {
@@ -514,10 +623,10 @@
 
         // Highlight operators with quoted values: operator:"value"
         html = html.replace(
-            /\b(site|intitle|allintitle|inurl|allinurl|intext|allintext|inbody|filetype|ext|related|define|inanchor|feed|hasfeed|contains|ip|language|location|prefer|hostname):(&quot;[^&]*&quot;)/gi,
+            /\b([\w.]+):(&quot;[^&]*&quot;)/gi,
             (match, op, val) => {
                 const opLower = op.toLowerCase();
-                if (opLower === 'filetype' || opLower === 'ext') {
+                if (['filetype', 'ext', 'mime'].includes(opLower)) {
                     return `<span class="op">${op}:</span><span class="ft">${val}</span>`;
                 }
                 return `<span class="op">${op}:</span><span class="qt">${val}</span>`;
@@ -526,19 +635,27 @@
 
         // Highlight operators with unquoted values: operator:value
         html = html.replace(
-            /\b(site|intitle|allintitle|inurl|allinurl|intext|allintext|inbody|filetype|ext|related|define|inanchor|feed|hasfeed|contains|ip|language|location|prefer|hostname):(\S+)/gi,
+            /\b([\w.]+):(\S+)/gi,
             (match, op, val) => {
-                // Skip if already wrapped in a span (from previous regex)
                 if (match.includes('<span')) return match;
                 const opLower = op.toLowerCase();
-                if (opLower === 'filetype' || opLower === 'ext') {
+                if (['filetype', 'ext', 'mime'].includes(opLower)) {
                     return `<span class="op">${op}:</span><span class="ft">${val}</span>`;
                 }
                 return `<span class="op">${op}:</span><span class="kw">${val}</span>`;
             }
         );
 
-        // Highlight standalone quoted strings (not preceded by operator:)
+        // Highlight "in:name value" style operators (GitHub)
+        html = html.replace(
+            /\b(in:\w+)\s+(\S+)/gi,
+            (match, op, val) => {
+                if (match.includes('<span')) return match;
+                return `<span class="op">${op}</span> <span class="kw">${val}</span>`;
+            }
+        );
+
+        // Highlight standalone quoted strings
         html = html.replace(
             /(?<![:\w])(&quot;[^&]*&quot;)/g,
             '<span class="qt">$1</span>'
@@ -550,9 +667,13 @@
             '$1<span class="neg">$2</span>'
         );
 
-        // Highlight NOT keyword (for Bing)
+        // Highlight NOT keyword (Bing/GitHub) and ~~ (Yandex)
         html = html.replace(
             /(^|\s)(NOT\s+\S+)/g,
+            '$1<span class="neg">$2</span>'
+        );
+        html = html.replace(
+            /(^|\s)(~~\S+)/g,
             '$1<span class="neg">$2</span>'
         );
 
@@ -569,12 +690,13 @@
             filteredDorks = allDorks.filter((d) => d.toLowerCase().includes(term));
         }
 
+        useVirtualScroll = filteredDorks.length > RENDER_CHUNK_LIMIT;
         selectedRows.clear();
         renderFilteredResults();
         updateButtons();
 
-        // Highlight search term in rendered results
-        if (term && els.resultsList) {
+        // Highlight search term in rendered results (only for direct rendering)
+        if (term && !useVirtualScroll && els.resultsList) {
             const escapedTerm = escapeRegex(escapeHtml(term));
             els.resultsList.querySelectorAll('.dork-row__text').forEach((el) => {
                 el.innerHTML = el.innerHTML.replace(
@@ -582,35 +704,6 @@
                     '<span class="highlight">$1</span>'
                 );
             });
-        }
-    }
-
-    /**
-     * Render filtered results without clearing the search box.
-     */
-    function renderFilteredResults() {
-        if (filteredDorks.length === 0) {
-            if (els.resultsEmpty) els.resultsEmpty.style.display = 'flex';
-            if (els.resultsList) els.resultsList.style.display = 'none';
-            if (els.resultCount) els.resultCount.textContent = '0 dorks';
-            return;
-        }
-
-        if (els.resultsEmpty) els.resultsEmpty.style.display = 'none';
-        if (els.resultsList) els.resultsList.style.display = 'block';
-
-        const frag = document.createDocumentFragment();
-        filteredDorks.forEach((dork, idx) => {
-            frag.appendChild(createDorkRow(dork, idx + 1));
-        });
-
-        if (els.resultsList) {
-            els.resultsList.innerHTML = '';
-            els.resultsList.appendChild(frag);
-        }
-
-        if (els.resultCount) {
-            els.resultCount.textContent = `${filteredDorks.length.toLocaleString()} dorks`;
         }
     }
 
@@ -661,7 +754,6 @@
         try {
             await navigator.clipboard.writeText(text);
         } catch {
-            // Fallback for non-secure contexts
             const ta = document.createElement('textarea');
             ta.value = text;
             ta.style.cssText = 'position:fixed;left:-9999px;top:-9999px;';
