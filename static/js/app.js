@@ -1,8 +1,8 @@
 /**
- * DorkForge - Frontend Application
- * ==================================
- * Handles UI interactions, API communication, and result rendering
- * for multi-engine dork generation.
+ * DorkForge v4.0 - Frontend Application
+ * ========================================
+ * Handles UI interactions, API communication, panel resizing,
+ * and result rendering for multi-engine dork generation.
  */
 
 (function () {
@@ -15,53 +15,42 @@
     let selectedRows = new Set();
     let engineConfig = null;
 
-    // ── DOM References ──
+    // ── DOM Helpers ──
     const $ = (sel) => document.querySelector(sel);
     const $$ = (sel) => document.querySelectorAll(sel);
 
-    const els = {
-        engineSelector: $('#engineSelector'),
-        keywordsInput: $('#keywordsInput'),
-        keywordFileUpload: $('#keywordFileUpload'),
-        clearKeywords: $('#clearKeywords'),
-        operatorGrid: $('#operatorGrid'),
-        filetypeGrid: $('#filetypeGrid'),
-        siteInput: $('#siteInput'),
-        exclusionsInput: $('#exclusionsInput'),
-        useQuotes: $('#useQuotes'),
-        maxResults: $('#maxResults'),
-        generateBtn: $('#generateBtn'),
-        searchInput: $('#searchInput'),
-        sortBtn: $('#sortBtn'),
-        shuffleBtn: $('#shuffleBtn'),
-        resultsEmpty: $('#resultsEmpty'),
-        resultsList: $('#resultsList'),
-        resultCount: $('#resultCount'),
-        warningsContainer: $('#warningsContainer'),
-        copyAllBtn: $('#copyAllBtn'),
-        copySelectedBtn: $('#copySelectedBtn'),
-        exportTxtBtn: $('#exportTxtBtn'),
-        exportCsvBtn: $('#exportCsvBtn'),
-        exportJsonBtn: $('#exportJsonBtn'),
-        loadingOverlay: $('#loadingOverlay'),
-        statPossibleVal: $('#statPossibleVal'),
-        statGeneratedVal: $('#statGeneratedVal'),
-        keywordCount: $('#keywordCount'),
-        operatorCount: $('#operatorCount'),
-        filetypeCount: $('#filetypeCount'),
-        selectAllOps: $('#selectAllOps'),
-        deselectAllOps: $('#deselectAllOps'),
-        selectAllFt: $('#selectAllFt'),
-        deselectAllFt: $('#deselectAllFt'),
-    };
+    // ── Cached DOM References ──
+    const els = {};
+
+    function cacheElements() {
+        const ids = [
+            'engineSelector', 'keywordsInput', 'keywordFileUpload', 'clearKeywords',
+            'operatorGrid', 'filetypeGrid', 'siteInput', 'exclusionsInput',
+            'useQuotes', 'maxResults', 'generateBtn', 'searchInput', 'searchClear',
+            'sortBtn', 'shuffleBtn', 'resultsEmpty', 'resultsList', 'resultCount',
+            'warningsContainer', 'copyAllBtn', 'copySelectedBtn',
+            'exportTxtBtn', 'exportCsvBtn', 'exportJsonBtn',
+            'loadingOverlay', 'statPossibleVal', 'statGeneratedVal',
+            'keywordCount', 'operatorCount', 'filetypeCount',
+            'selectAllOps', 'deselectAllOps', 'selectAllFt', 'deselectAllFt',
+            'configPanel', 'resultsPanel', 'resizeHandle',
+        ];
+        ids.forEach((id) => {
+            els[id] = $('#' + id);
+        });
+    }
 
     // ── Initialize ──
     async function init() {
+        cacheElements();
+
         try {
             const resp = await fetch('/api/config');
+            if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
             engineConfig = await resp.json();
         } catch (e) {
             console.error('Failed to load config:', e);
+            toast('Failed to load configuration. Please refresh.', 'error');
             return;
         }
 
@@ -69,6 +58,7 @@
         renderOperators();
         renderFiletypes();
         bindEvents();
+        setupPanelResize();
         updateCounts();
     }
 
@@ -90,21 +80,25 @@
 
     // ── Render Operators ──
     function renderOperators() {
-        const eng = engineConfig.engines[currentEngine];
-        if (!eng) return;
+        const eng = engineConfig?.engines?.[currentEngine];
+        if (!eng || !els.operatorGrid) return;
 
         els.operatorGrid.innerHTML = '';
         const ops = eng.operators;
 
         Object.keys(ops).forEach((key) => {
             const op = ops[key];
-            const chip = document.createElement('div');
+            const chip = document.createElement('button');
+            chip.type = 'button';
             chip.className = 'chip';
             chip.dataset.operator = key;
             chip.textContent = key + ':';
-            chip.title = op.description;
+            chip.title = op.description || key;
+            chip.setAttribute('role', 'checkbox');
+            chip.setAttribute('aria-checked', 'false');
             chip.addEventListener('click', () => {
                 chip.classList.toggle('chip--active');
+                chip.setAttribute('aria-checked', chip.classList.contains('chip--active'));
                 updateCounts();
             });
             els.operatorGrid.appendChild(chip);
@@ -113,19 +107,23 @@
 
     // ── Render Filetypes ──
     function renderFiletypes() {
-        const eng = engineConfig.engines[currentEngine];
-        if (!eng) return;
+        const eng = engineConfig?.engines?.[currentEngine];
+        if (!eng || !els.filetypeGrid) return;
 
         els.filetypeGrid.innerHTML = '';
         const fts = eng.filetypes || [];
 
         fts.forEach((ft) => {
-            const chip = document.createElement('div');
+            const chip = document.createElement('button');
+            chip.type = 'button';
             chip.className = 'chip';
             chip.dataset.filetype = ft;
             chip.textContent = '.' + ft;
+            chip.setAttribute('role', 'checkbox');
+            chip.setAttribute('aria-checked', 'false');
             chip.addEventListener('click', () => {
                 chip.classList.toggle('chip--active');
+                chip.setAttribute('aria-checked', chip.classList.contains('chip--active'));
                 updateCounts();
             });
             els.filetypeGrid.appendChild(chip);
@@ -135,17 +133,17 @@
     // ── Event Bindings ──
     function bindEvents() {
         // Generate
-        els.generateBtn.addEventListener('click', generate);
+        els.generateBtn?.addEventListener('click', generate);
 
         // Keyword input count
-        els.keywordsInput.addEventListener('input', updateCounts);
+        els.keywordsInput?.addEventListener('input', updateCounts);
 
         // File upload
-        els.keywordFileUpload.addEventListener('change', handleFileUpload);
+        els.keywordFileUpload?.addEventListener('change', handleFileUpload);
 
         // Clear keywords
-        els.clearKeywords.addEventListener('click', () => {
-            els.keywordsInput.value = '';
+        els.clearKeywords?.addEventListener('click', () => {
+            if (els.keywordsInput) els.keywordsInput.value = '';
             updateCounts();
         });
 
@@ -153,64 +151,124 @@
         $$('.preset-btn').forEach((btn) => {
             btn.addEventListener('click', () => {
                 const kws = btn.dataset.keywords.split('||');
+                if (!els.keywordsInput) return;
                 const current = els.keywordsInput.value.trim();
-                if (current) {
-                    els.keywordsInput.value = current + '\n' + kws.join('\n');
-                } else {
-                    els.keywordsInput.value = kws.join('\n');
-                }
+                els.keywordsInput.value = current
+                    ? current + '\n' + kws.join('\n')
+                    : kws.join('\n');
                 updateCounts();
+                toast(`Added ${kws.length} keywords from preset`);
             });
         });
 
         // Select/Deselect All
-        els.selectAllOps.addEventListener('click', () => toggleAll(els.operatorGrid, true));
-        els.deselectAllOps.addEventListener('click', () => toggleAll(els.operatorGrid, false));
-        els.selectAllFt.addEventListener('click', () => toggleAll(els.filetypeGrid, true));
-        els.deselectAllFt.addEventListener('click', () => toggleAll(els.filetypeGrid, false));
+        els.selectAllOps?.addEventListener('click', () => toggleAll(els.operatorGrid, true));
+        els.deselectAllOps?.addEventListener('click', () => toggleAll(els.operatorGrid, false));
+        els.selectAllFt?.addEventListener('click', () => toggleAll(els.filetypeGrid, true));
+        els.deselectAllFt?.addEventListener('click', () => toggleAll(els.filetypeGrid, false));
 
         // Search
-        els.searchInput.addEventListener('input', applyFilter);
+        els.searchInput?.addEventListener('input', () => {
+            applyFilter();
+            // Show/hide clear button
+            if (els.searchClear) {
+                els.searchClear.style.display = els.searchInput.value ? 'block' : 'none';
+            }
+        });
+
+        // Search clear
+        els.searchClear?.addEventListener('click', () => {
+            if (els.searchInput) els.searchInput.value = '';
+            els.searchClear.style.display = 'none';
+            applyFilter();
+        });
 
         // Sort / Shuffle
-        els.sortBtn.addEventListener('click', sortResults);
-        els.shuffleBtn.addEventListener('click', shuffleResults);
+        els.sortBtn?.addEventListener('click', sortResults);
+        els.shuffleBtn?.addEventListener('click', shuffleResults);
 
         // Copy
-        els.copyAllBtn.addEventListener('click', copyAll);
-        els.copySelectedBtn.addEventListener('click', copySelected);
+        els.copyAllBtn?.addEventListener('click', copyAll);
+        els.copySelectedBtn?.addEventListener('click', copySelected);
 
         // Export
-        els.exportTxtBtn.addEventListener('click', () => exportDorks('txt'));
-        els.exportCsvBtn.addEventListener('click', () => exportDorks('csv'));
-        els.exportJsonBtn.addEventListener('click', () => exportDorks('json'));
+        els.exportTxtBtn?.addEventListener('click', () => exportDorks('txt'));
+        els.exportCsvBtn?.addEventListener('click', () => exportDorks('csv'));
+        els.exportJsonBtn?.addEventListener('click', () => exportDorks('json'));
 
-        // Keyboard shortcut
+        // Keyboard shortcuts
         document.addEventListener('keydown', (e) => {
+            // Ctrl+Enter -> Generate
             if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
                 e.preventDefault();
                 generate();
+            }
+            // Escape -> Clear search
+            if (e.key === 'Escape' && document.activeElement === els.searchInput) {
+                els.searchInput.value = '';
+                if (els.searchClear) els.searchClear.style.display = 'none';
+                applyFilter();
+                els.searchInput.blur();
+            }
+        });
+    }
+
+    // ── Panel Resize ──
+    function setupPanelResize() {
+        const handle = els.resizeHandle;
+        const panel = els.configPanel;
+        if (!handle || !panel) return;
+
+        let isResizing = false;
+        let startX = 0;
+        let startWidth = 0;
+
+        handle.addEventListener('mousedown', (e) => {
+            isResizing = true;
+            startX = e.clientX;
+            startWidth = panel.offsetWidth;
+            handle.classList.add('resize-handle--active');
+            document.body.style.cursor = 'col-resize';
+            document.body.style.userSelect = 'none';
+            e.preventDefault();
+        });
+
+        document.addEventListener('mousemove', (e) => {
+            if (!isResizing) return;
+            const diff = e.clientX - startX;
+            const newWidth = Math.max(300, Math.min(520, startWidth + diff));
+            panel.style.width = newWidth + 'px';
+        });
+
+        document.addEventListener('mouseup', () => {
+            if (isResizing) {
+                isResizing = false;
+                handle.classList.remove('resize-handle--active');
+                document.body.style.cursor = '';
+                document.body.style.userSelect = '';
             }
         });
     }
 
     // ── File Upload ──
     function handleFileUpload(e) {
-        const file = e.target.files[0];
+        const file = e.target.files?.[0];
         if (!file) return;
 
         const reader = new FileReader();
         reader.onload = (ev) => {
             const text = ev.target.result;
             const lines = text.split('\n').filter((l) => l.trim());
+            if (!els.keywordsInput) return;
             const current = els.keywordsInput.value.trim();
-            if (current) {
-                els.keywordsInput.value = current + '\n' + lines.join('\n');
-            } else {
-                els.keywordsInput.value = lines.join('\n');
-            }
+            els.keywordsInput.value = current
+                ? current + '\n' + lines.join('\n')
+                : lines.join('\n');
             updateCounts();
             toast(`Loaded ${lines.length} keywords from file`);
+        };
+        reader.onerror = () => {
+            toast('Failed to read file', 'error');
         };
         reader.readAsText(file);
         e.target.value = '';
@@ -218,9 +276,15 @@
 
     // ── Toggle All Chips ──
     function toggleAll(grid, active) {
+        if (!grid) return;
         grid.querySelectorAll('.chip').forEach((c) => {
-            if (active) c.classList.add('chip--active');
-            else c.classList.remove('chip--active');
+            if (active) {
+                c.classList.add('chip--active');
+                c.setAttribute('aria-checked', 'true');
+            } else {
+                c.classList.remove('chip--active');
+                c.setAttribute('aria-checked', 'false');
+            }
         });
         updateCounts();
     }
@@ -228,23 +292,24 @@
     // ── Update Counts ──
     function updateCounts() {
         const keywords = getKeywords();
-        els.keywordCount.textContent = keywords.length;
+        if (els.keywordCount) els.keywordCount.textContent = keywords.length;
 
         const ops = getSelectedOperators();
-        els.operatorCount.textContent = ops.length;
+        if (els.operatorCount) els.operatorCount.textContent = ops.length;
 
         const fts = getSelectedFiletypes();
-        els.filetypeCount.textContent = fts.length;
+        if (els.filetypeCount) els.filetypeCount.textContent = fts.length;
 
         // Estimate possible combinations
+        const kLen = keywords.length;
+        const oLen = ops.length;
+        const fLen = fts.length;
         let possible = 0;
-        const kLen = keywords.length || 0;
-        const oLen = ops.length || 0;
-        const fLen = fts.length || 0;
 
         if (oLen > 0 && fLen > 0) {
-            // op*kw*ft + kw*ft
-            possible = (oLen * kLen * fLen) + (kLen * fLen);
+            // (ops * keywords * filetypes) + (keywords * filetypes) for plain keyword+ft combos
+            const nonFtOps = ops.filter(o => o !== 'filetype' && o !== 'ext').length;
+            possible = (nonFtOps * kLen * fLen) + (kLen * fLen);
         } else if (oLen > 0) {
             possible = oLen * kLen;
         } else if (fLen > 0) {
@@ -253,11 +318,12 @@
             possible = kLen;
         }
 
-        els.statPossibleVal.textContent = possible.toLocaleString();
+        if (els.statPossibleVal) els.statPossibleVal.textContent = possible.toLocaleString();
     }
 
     // ── Data Extractors ──
     function getKeywords() {
+        if (!els.keywordsInput) return [];
         return els.keywordsInput.value
             .split('\n')
             .map((l) => l.trim())
@@ -265,11 +331,13 @@
     }
 
     function getSelectedOperators() {
+        if (!els.operatorGrid) return [];
         return Array.from(els.operatorGrid.querySelectorAll('.chip--active'))
             .map((c) => c.dataset.operator);
     }
 
     function getSelectedFiletypes() {
+        if (!els.filetypeGrid) return [];
         return Array.from(els.filetypeGrid.querySelectorAll('.chip--active'))
             .map((c) => c.dataset.filetype);
     }
@@ -279,26 +347,28 @@
         const keywords = getKeywords();
         if (keywords.length === 0) {
             toast('Please enter at least one keyword', 'warning');
-            els.keywordsInput.focus();
+            els.keywordsInput?.focus();
             return;
         }
+
+        const maxResultsVal = parseInt(els.maxResults?.value) || 100;
 
         const payload = {
             engine: currentEngine,
             keywords: keywords,
             operators: getSelectedOperators(),
             filetypes: getSelectedFiletypes(),
-            site: els.siteInput.value.trim(),
-            use_quotes: els.useQuotes.checked,
-            exclusions: els.exclusionsInput.value
+            site: els.siteInput?.value.trim() || '',
+            use_quotes: els.useQuotes?.checked || false,
+            exclusions: (els.exclusionsInput?.value || '')
                 .split('\n')
                 .map((l) => l.trim())
                 .filter((l) => l),
-            max_results: parseInt(els.maxResults.value) || 100,
+            max_results: maxResultsVal,
         };
 
-        els.loadingOverlay.style.display = 'flex';
-        els.generateBtn.disabled = true;
+        if (els.loadingOverlay) els.loadingOverlay.style.display = 'flex';
+        if (els.generateBtn) els.generateBtn.disabled = true;
 
         try {
             const resp = await fetch('/api/generate', {
@@ -306,6 +376,10 @@
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(payload),
             });
+
+            if (!resp.ok) {
+                throw new Error(`Server error (HTTP ${resp.status})`);
+            }
 
             const result = await resp.json();
 
@@ -318,18 +392,24 @@
             filteredDorks = [...allDorks];
             selectedRows.clear();
 
-            // Stats
-            els.statGeneratedVal.textContent = result.total_generated.toLocaleString();
-            els.statPossibleVal.textContent = result.total_possible.toLocaleString();
+            // Update stats
+            if (els.statGeneratedVal) {
+                els.statGeneratedVal.textContent = result.total_generated.toLocaleString();
+            }
+            if (els.statPossibleVal) {
+                els.statPossibleVal.textContent = result.total_possible.toLocaleString();
+            }
 
             // Warnings
-            if (result.warnings && result.warnings.length > 0) {
-                els.warningsContainer.style.display = 'block';
-                els.warningsContainer.innerHTML = result.warnings
-                    .map((w) => `<div class="warning-item">${escapeHtml(w)}</div>`)
-                    .join('');
+            if (result.warnings?.length > 0) {
+                if (els.warningsContainer) {
+                    els.warningsContainer.style.display = 'block';
+                    els.warningsContainer.innerHTML = result.warnings
+                        .map((w) => `<div class="warning-item">${escapeHtml(w)}</div>`)
+                        .join('');
+                }
             } else {
-                els.warningsContainer.style.display = 'none';
+                if (els.warningsContainer) els.warningsContainer.style.display = 'none';
             }
 
             renderResults();
@@ -343,37 +423,41 @@
         } catch (e) {
             toast('Generation failed: ' + e.message, 'error');
         } finally {
-            els.loadingOverlay.style.display = 'none';
-            els.generateBtn.disabled = false;
+            if (els.loadingOverlay) els.loadingOverlay.style.display = 'none';
+            if (els.generateBtn) els.generateBtn.disabled = false;
         }
     }
 
     // ── Render Results ──
     function renderResults() {
-        els.searchInput.value = '';
+        if (els.searchInput) els.searchInput.value = '';
+        if (els.searchClear) els.searchClear.style.display = 'none';
 
         if (filteredDorks.length === 0) {
-            els.resultsEmpty.style.display = 'flex';
-            els.resultsList.style.display = 'none';
-            els.resultCount.textContent = '0 dorks';
+            if (els.resultsEmpty) els.resultsEmpty.style.display = 'flex';
+            if (els.resultsList) els.resultsList.style.display = 'none';
+            if (els.resultCount) els.resultCount.textContent = '0 dorks';
             return;
         }
 
-        els.resultsEmpty.style.display = 'none';
-        els.resultsList.style.display = 'block';
+        if (els.resultsEmpty) els.resultsEmpty.style.display = 'none';
+        if (els.resultsList) els.resultsList.style.display = 'block';
 
         // Use DocumentFragment for performance
         const frag = document.createDocumentFragment();
 
         filteredDorks.forEach((dork, idx) => {
-            const row = createDorkRow(dork, idx + 1);
-            frag.appendChild(row);
+            frag.appendChild(createDorkRow(dork, idx + 1));
         });
 
-        els.resultsList.innerHTML = '';
-        els.resultsList.appendChild(frag);
+        if (els.resultsList) {
+            els.resultsList.innerHTML = '';
+            els.resultsList.appendChild(frag);
+        }
 
-        els.resultCount.textContent = `${filteredDorks.length.toLocaleString()} dorks`;
+        if (els.resultCount) {
+            els.resultCount.textContent = `${filteredDorks.length.toLocaleString()} dorks`;
+        }
     }
 
     // ── Create Dork Row ──
@@ -381,6 +465,7 @@
         const row = document.createElement('div');
         row.className = 'dork-row';
         row.dataset.index = num - 1;
+        row.setAttribute('role', 'row');
 
         // Line number
         const numEl = document.createElement('div');
@@ -393,10 +478,12 @@
         textEl.innerHTML = highlightDork(dork);
 
         // Copy button
-        const copyEl = document.createElement('div');
+        const copyEl = document.createElement('button');
+        copyEl.type = 'button';
         copyEl.className = 'dork-row__copy';
-        copyEl.innerHTML = '&#128203;';
+        copyEl.innerHTML = '\u{1F4CB}';
         copyEl.title = 'Copy this dork';
+        copyEl.setAttribute('aria-label', 'Copy dork to clipboard');
         copyEl.addEventListener('click', (e) => {
             e.stopPropagation();
             copyToClipboard(dork);
@@ -425,7 +512,6 @@
 
     // ── Syntax Highlighting ──
     function highlightDork(dork) {
-        // Escape first
         let html = escapeHtml(dork);
 
         // Highlight operators (word:value)
@@ -448,8 +534,14 @@
 
         // Highlight negations
         html = html.replace(
-            /(?:^|\s)(-\S+)/g,
-            (match, neg) => ` <span class="neg">${neg}</span>`
+            /(^|\s)(-\S+)/g,
+            '$1<span class="neg">$2</span>'
+        );
+
+        // Highlight NOT keyword (for Bing/Yahoo)
+        html = html.replace(
+            /(^|\s)(NOT\s+\S+)/g,
+            '$1<span class="neg">$2</span>'
         );
 
         return html.trim();
@@ -457,7 +549,7 @@
 
     // ── Filter ──
     function applyFilter() {
-        const term = els.searchInput.value.trim().toLowerCase();
+        const term = els.searchInput?.value.trim().toLowerCase() || '';
 
         if (!term) {
             filteredDorks = [...allDorks];
@@ -469,11 +561,12 @@
         renderResults();
         updateButtons();
 
-        // Highlight search term
-        if (term) {
+        // Highlight search term in rendered results
+        if (term && els.resultsList) {
+            const escapedTerm = escapeRegex(escapeHtml(term));
             els.resultsList.querySelectorAll('.dork-row__text').forEach((el) => {
                 el.innerHTML = el.innerHTML.replace(
-                    new RegExp(`(${escapeRegex(escapeHtml(term))})`, 'gi'),
+                    new RegExp(`(${escapedTerm})`, 'gi'),
                     '<span class="highlight">$1</span>'
                 );
             });
@@ -482,9 +575,10 @@
 
     // ── Sort / Shuffle ──
     function sortResults() {
-        filteredDorks.sort();
+        filteredDorks.sort((a, b) => a.localeCompare(b));
         selectedRows.clear();
         renderResults();
+        updateButtons();
     }
 
     function shuffleResults() {
@@ -494,6 +588,7 @@
         }
         selectedRows.clear();
         renderResults();
+        updateButtons();
     }
 
     // ── Copy ──
@@ -517,13 +612,13 @@
         try {
             await navigator.clipboard.writeText(text);
         } catch {
+            // Fallback for non-secure contexts
             const ta = document.createElement('textarea');
             ta.value = text;
-            ta.style.position = 'fixed';
-            ta.style.left = '-9999px';
+            ta.style.cssText = 'position:fixed;left:-9999px;top:-9999px;';
             document.body.appendChild(ta);
             ta.select();
-            document.execCommand('copy');
+            try { document.execCommand('copy'); } catch { /* ignore */ }
             document.body.removeChild(ta);
         }
     }
@@ -532,8 +627,8 @@
     async function exportDorks(format) {
         if (filteredDorks.length === 0) return;
 
-        const eng = engineConfig.engines[currentEngine];
-        const engineName = eng ? eng.name : currentEngine;
+        const eng = engineConfig?.engines?.[currentEngine];
+        const engineName = eng?.name || currentEngine;
 
         try {
             const resp = await fetch('/api/export', {
@@ -545,6 +640,8 @@
                     engine_name: engineName,
                 }),
             });
+
+            if (!resp.ok) throw new Error(`Export failed (HTTP ${resp.status})`);
 
             const blob = await resp.blob();
             const url = URL.createObjectURL(blob);
@@ -567,11 +664,11 @@
         const hasDorks = filteredDorks.length > 0;
         const hasSelected = selectedRows.size > 0;
 
-        els.copyAllBtn.disabled = !hasDorks;
-        els.copySelectedBtn.disabled = !hasSelected;
-        els.exportTxtBtn.disabled = !hasDorks;
-        els.exportCsvBtn.disabled = !hasDorks;
-        els.exportJsonBtn.disabled = !hasDorks;
+        if (els.copyAllBtn) els.copyAllBtn.disabled = !hasDorks;
+        if (els.copySelectedBtn) els.copySelectedBtn.disabled = !hasSelected;
+        if (els.exportTxtBtn) els.exportTxtBtn.disabled = !hasDorks;
+        if (els.exportCsvBtn) els.exportCsvBtn.disabled = !hasDorks;
+        if (els.exportJsonBtn) els.exportJsonBtn.disabled = !hasDorks;
     }
 
     // ── Toast ──
@@ -581,13 +678,16 @@
 
         const el = document.createElement('div');
         el.className = 'toast';
+        el.setAttribute('role', 'alert');
         el.textContent = message;
 
         if (type === 'warning') el.style.background = 'var(--warning)';
         else if (type === 'error') el.style.background = 'var(--error)';
 
         document.body.appendChild(el);
-        setTimeout(() => el.remove(), 2700);
+        setTimeout(() => {
+            if (el.parentNode) el.remove();
+        }, 2700);
     }
 
     // ── Utilities ──

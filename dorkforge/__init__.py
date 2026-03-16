@@ -2,23 +2,25 @@
 DorkForge - Professional Dork Query Generator
 ===============================================
 
-A modular web application for building and managing
+A modular Flask web application for building and managing
 dork queries across multiple search engines (Google, Bing,
 DuckDuckGo, Yahoo) with correct syntax per engine.
 
 Architecture:
-    config/          - JSON configuration (operators, filetypes, rules)
+    config/              - JSON configuration (operators, filetypes, rules)
     dorkforge/
-        engine/      - Core query generation logic (DorkGenerator, DorkBuilder)
-        state/       - Centralized application state management
-        ui/          - Legacy UI widgets (Tkinter, deprecated)
-        ui/widgets/  - Legacy reusable widget components
-        data/        - Legacy data sets (operators, keywords, filetypes)
-        utils/       - Shared utilities (styling, helpers)
-    app.py           - Flask web application
-    templates/       - Jinja2 HTML templates
-    static/          - CSS, JS, assets
+        __init__.py      - Package root, version info
+        engine/          - Core query generation logic
+            __init__.py  - DorkConfig, DorkBuilder, DorkValidator, DorkGenerator
+        routes/          - Flask route blueprints
+            __init__.py  - Route registration
+            api.py       - /api/* endpoints
+            views.py     - Page rendering routes
+    app.py               - Flask application factory
+    templates/           - Jinja2 HTML templates
+    static/              - CSS, JS assets
+    tests/               - Unit and integration tests
 """
 
-__version__ = "3.0.0"
+__version__ = "4.0.0"
 __app_name__ = "DorkForge"
