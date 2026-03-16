@@ -1,0 +1,152 @@
+{
+  "search_engines": {
+    "google": {
+      "name": "Google",
+      "operators": {
+        "site": { "syntax": "site:{value}", "description": "Restrict to specific domain" },
+        "intitle": { "syntax": "intitle:{value}", "description": "Page title contains term" },
+        "allintitle": { "syntax": "allintitle:{value}", "description": "Title contains ALL terms" },
+        "inurl": { "syntax": "inurl:{value}", "description": "URL contains term" },
+        "allinurl": { "syntax": "allinurl:{value}", "description": "URL contains ALL terms" },
+        "intext": { "syntax": "intext:{value}", "description": "Body text contains term" },
+        "allintext": { "syntax": "allintext:{value}", "description": "Body contains ALL terms" },
+        "filetype": { "syntax": "filetype:{value}", "description": "Specific file extension" },
+        "ext": { "syntax": "ext:{value}", "description": "File extension (alias)" },
+        "cache": { "syntax": "cache:{value}", "description": "Google cached version" },
+        "link": { "syntax": "link:{value}", "description": "Pages linking to URL" },
+        "related": { "syntax": "related:{value}", "description": "Similar pages" },
+        "info": { "syntax": "info:{value}", "description": "Info about URL" },
+        "define": { "syntax": "define:{value}", "description": "Definition of term" },
+        "inanchor": { "syntax": "inanchor:{value}", "description": "Anchor text contains term" }
+      },
+      "boolean_operators": {
+        "AND": " ",
+        "OR": " OR ",
+        "NOT": " -",
+        "EXACT": "\"{value}\"",
+        "WILDCARD": "*",
+        "GROUP": "({value})"
+      },
+      "filetype_list": [
+        "pdf", "doc", "docx", "xls", "xlsx", "ppt", "pptx",
+        "php", "asp", "aspx", "jsp", "html", "htm",
+        "sql", "csv", "log", "txt", "bak", "db", "mdb", "sqlite",
+        "conf", "cfg", "ini", "yml", "yaml", "env", "xml", "json",
+        "zip", "tar", "gz", "rar", "7z",
+        "odt", "rtf", "properties"
+      ]
+    },
+    "bing": {
+      "name": "Bing",
+      "operators": {
+        "site": { "syntax": "site:{value}", "description": "Restrict to specific domain" },
+        "intitle": { "syntax": "intitle:{value}", "description": "Page title contains term" },
+        "inurl": { "syntax": "inurl:{value}", "description": "URL contains term" },
+        "inbody": { "syntax": "inbody:{value}", "description": "Body text contains term" },
+        "filetype": { "syntax": "filetype:{value}", "description": "Specific file extension" },
+        "feed": { "syntax": "feed:{value}", "description": "RSS/Atom feeds" },
+        "hasfeed": { "syntax": "hasfeed:{value}", "description": "Pages with feeds" },
+        "contains": { "syntax": "contains:{value}", "description": "Page contains file type links" },
+        "ip": { "syntax": "ip:{value}", "description": "Pages hosted on IP" },
+        "language": { "syntax": "language:{value}", "description": "Language of page" },
+        "location": { "syntax": "location:{value}", "description": "Location of content" },
+        "prefer": { "syntax": "prefer:{value}", "description": "Prefer results with term" }
+      },
+      "boolean_operators": {
+        "AND": " AND ",
+        "OR": " OR ",
+        "NOT": " NOT ",
+        "EXACT": "\"{value}\"",
+        "WILDCARD": "*",
+        "GROUP": "({value})"
+      },
+      "filetype_list": [
+        "pdf", "doc", "docx", "xls", "xlsx", "ppt", "pptx",
+        "php", "asp", "aspx", "html", "htm",
+        "txt", "csv", "xml", "json"
+      ]
+    },
+    "duckduckgo": {
+      "name": "DuckDuckGo",
+      "operators": {
+        "site": { "syntax": "site:{value}", "description": "Restrict to specific domain" },
+        "intitle": { "syntax": "intitle:{value}", "description": "Page title contains term" },
+        "inurl": { "syntax": "inurl:{value}", "description": "URL contains term" },
+        "filetype": { "syntax": "filetype:{value}", "description": "Specific file extension" }
+      },
+      "boolean_operators": {
+        "AND": " ",
+        "OR": " OR ",
+        "NOT": " -",
+        "EXACT": "\"{value}\"",
+        "WILDCARD": null,
+        "GROUP": null
+      },
+      "filetype_list": [
+        "pdf", "doc", "docx", "xls", "xlsx", "ppt", "pptx",
+        "html", "htm", "xml", "txt", "csv"
+      ]
+    },
+    "yahoo": {
+      "name": "Yahoo",
+      "operators": {
+        "site": { "syntax": "site:{value}", "description": "Restrict to specific domain" },
+        "intitle": { "syntax": "intitle:{value}", "description": "Page title contains term" },
+        "inurl": { "syntax": "inurl:{value}", "description": "URL contains term" },
+        "intext": { "syntax": "intext:{value}", "description": "Body text contains term" },
+        "filetype": { "syntax": "filetype:{value}", "description": "Specific file extension (via Bing)" },
+        "hostname": { "syntax": "hostname:{value}", "description": "Specific hostname" }
+      },
+      "boolean_operators": {
+        "AND": " AND ",
+        "OR": " OR ",
+        "NOT": " -",
+        "EXACT": "\"{value}\"",
+        "WILDCARD": "*",
+        "GROUP": "({value})"
+      },
+      "filetype_list": [
+        "pdf", "doc", "docx", "xls", "xlsx", "ppt", "pptx",
+        "php", "asp", "aspx", "html", "htm",
+        "txt", "csv", "xml"
+      ]
+    }
+  },
+  "default_keywords": {
+    "Credentials": [
+      "login", "password", "username", "admin", "auth",
+      "credential", "passwd", "secret", "token", "api_key",
+      "apikey", "access_token", "private_key", "ssh_key"
+    ],
+    "Documents & Data": [
+      "confidential", "internal", "private", "restricted",
+      "budget", "salary", "invoice", "report", "backup",
+      "database", "dump", "export", "spreadsheet"
+    ],
+    "Infrastructure": [
+      "dashboard", "admin panel", "control panel", "cpanel",
+      "phpmyadmin", "webmail", "server-status", "server-info",
+      "index of", "parent directory", "directory listing"
+    ],
+    "Configuration": [
+      "config", "configuration", "setup", "install",
+      "env", ".env", "wp-config", "database.yml",
+      "settings", "application.properties"
+    ],
+    "Error Pages": [
+      "error", "warning", "exception", "stack trace",
+      "debug", "traceback", "fatal error", "syntax error",
+      "mysql error", "sql syntax"
+    ]
+  },
+  "generation_rules": {
+    "mutually_exclusive": [
+      ["filetype", "ext"],
+      ["intitle", "allintitle"],
+      ["inurl", "allinurl"],
+      ["intext", "allintext"]
+    ],
+    "max_operators_per_dork": 4,
+    "max_dork_length": 256
+  }
+}

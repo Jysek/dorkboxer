@@ -1,897 +1,508 @@
 """
-DorkForge - Comprehensive Unit Tests
-======================================
+DorkForge v3.0 - Comprehensive Unit Tests
+===========================================
 
 Tests for:
-    1. DorkGenerator engine (core logic, no UI)
-    2. OperatorRules (intelligent filtering)
-    3. AppState (centralized state management)
-    4. DorkGeneratorInput/Result data objects
+    1. DorkConfig (configuration loading)
+    2. DorkBuilder (syntax generation per engine)
+    3. DorkValidator (rule-based validation)
+    4. DorkGenerator (end-to-end generation)
+    5. Multi-engine syntax correctness
 """
 
 import unittest
 import sys
 import os
+import json
 
-# Ensure the parent directory is in path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from dorkforge.engine import (
-    DorkGenerator, DorkGeneratorInput, DorkGeneratorResult, OperatorRules,
-)
-from dorkforge.state import AppState, Action, BoxState, GenerationState, ResultsState
-from dorkforge.data import DEFAULT_TEMPLATES, OPERATOR_RULES, DEFAULT_BOXES
+from dorkforge.engine import DorkConfig, DorkBuilder, DorkValidator, DorkGenerator
 
 
-# ═════════════════════════════════════════════
-# Test DorkGenerator Engine
-# ═════════════════════════════════════════════
-class TestDorkGeneratorCartesian(unittest.TestCase):
-    """Test the DorkGenerator in cartesian product mode."""
+class TestDorkConfig(unittest.TestCase):
+    """Test configuration loading."""
 
     def setUp(self):
-        self.gen = DorkGenerator()
-
-    def test_basic_cartesian_product(self):
-        """Two boxes with 2 entries each -> 4 combinations."""
-        inp = DorkGeneratorInput(
-            box_entries={
-                "Operators": ["intitle:", "inurl:"],
-                "Keywords": ["login", "admin"],
-            },
-            mode="cartesian",
-            requested_count=100,
-            apply_rules=False,
+        config_path = os.path.join(
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+            "config", "default_config.json",
         )
-        result = self.gen.generate(inp)
-        self.assertEqual(len(result.dorks), 4)
-        self.assertIn("intitle:login", result.dorks)
-        self.assertIn("intitle:admin", result.dorks)
-        self.assertIn("inurl:login", result.dorks)
-        self.assertIn("inurl:admin", result.dorks)
+        self.config = DorkConfig(config_path)
 
-    def test_three_box_product(self):
-        """Three boxes: 2 x 2 x 2 = 8 combinations."""
-        inp = DorkGeneratorInput(
-            box_entries={
-                "A": ["a1", "a2"],
-                "B": ["b1", "b2"],
-                "C": ["c1", "c2"],
-            },
-            mode="cartesian",
-            requested_count=100,
-            apply_rules=False,
-        )
-        result = self.gen.generate(inp)
-        self.assertEqual(len(result.dorks), 8)
+    def test_engines_loaded(self):
+        engines = self.config.get_all_engine_ids()
+        self.assertIn("google", engines)
+        self.assertIn("bing", engines)
+        self.assertIn("duckduckgo", engines)
+        self.assertIn("yahoo", engines)
 
-    def test_all_empty_box_entries(self):
-        """All-empty entries should produce zero results."""
-        inp = DorkGeneratorInput(
-            box_entries={"A": [], "B": []},
-            mode="cartesian",
-            requested_count=100,
-            apply_rules=False,
-        )
-        result = self.gen.generate(inp)
-        self.assertEqual(len(result.dorks), 0)
+    def test_google_operators(self):
+        ops = self.config.get_operators("google")
+        self.assertIn("intitle", ops)
+        self.assertIn("site", ops)
+        self.assertIn("filetype", ops)
+        self.assertIn("inurl", ops)
 
-    def test_one_empty_box_skipped(self):
-        """Empty box is filtered out; non-empty box still produces results."""
-        inp = DorkGeneratorInput(
-            box_entries={"A": [], "B": ["test"]},
-            mode="cartesian",
-            requested_count=100,
-            apply_rules=False,
-        )
-        result = self.gen.generate(inp)
-        # The empty box is skipped, so only non-empty box participates
-        self.assertEqual(len(result.dorks), 1)
-        self.assertEqual(result.dorks[0], "test")
+    def test_bing_operators(self):
+        ops = self.config.get_operators("bing")
+        self.assertIn("site", ops)
+        self.assertIn("intitle", ops)
+        self.assertIn("inbody", ops)
+        self.assertIn("filetype", ops)
 
-    def test_single_entry_boxes(self):
-        """Single entry per box -> exactly 1 combination."""
-        inp = DorkGeneratorInput(
-            box_entries={"A": ["hello"], "B": ["world"]},
-            mode="cartesian",
-            requested_count=100,
-            apply_rules=False,
-        )
-        result = self.gen.generate(inp)
-        self.assertEqual(len(result.dorks), 1)
-        self.assertEqual(result.dorks[0], "helloworld")
+    def test_duckduckgo_operators(self):
+        ops = self.config.get_operators("duckduckgo")
+        self.assertIn("site", ops)
+        self.assertIn("intitle", ops)
+        self.assertIn("filetype", ops)
+        # DuckDuckGo has fewer operators
+        self.assertNotIn("cache", ops)
 
-    def test_requested_count_limits(self):
-        """Requesting fewer than total should limit results."""
-        inp = DorkGeneratorInput(
-            box_entries={
-                "A": [f"a{i}" for i in range(10)],
-                "B": [f"b{i}" for i in range(10)],
-            },
-            mode="cartesian",
-            requested_count=5,
-            apply_rules=False,
-            shuffle=False,
-        )
-        result = self.gen.generate(inp)
-        self.assertLessEqual(len(result.dorks), 5)
+    def test_yahoo_operators(self):
+        ops = self.config.get_operators("yahoo")
+        self.assertIn("site", ops)
+        self.assertIn("hostname", ops)
 
-    def test_deduplication(self):
-        """Duplicate entries should be deduplicated."""
-        inp = DorkGeneratorInput(
-            box_entries={"A": ["x", "x"], "B": ["y"]},
-            mode="cartesian",
-            requested_count=100,
-            apply_rules=False,
-        )
-        result = self.gen.generate(inp)
-        # "xy" appears twice from product, but dedup reduces to 1
-        self.assertEqual(len(result.dorks), 1)
+    def test_filetypes_loaded(self):
+        fts = self.config.get_filetypes("google")
+        self.assertIn("pdf", fts)
+        self.assertIn("php", fts)
+        self.assertIn("sql", fts)
 
-    def test_calculate_total(self):
-        """Total calculation should match product of list lengths."""
-        inp = DorkGeneratorInput(
-            box_entries={
-                "A": ["a1", "a2", "a3"],
-                "B": ["b1", "b2"],
-            },
-            mode="cartesian",
-        )
-        total = self.gen.calculate_total(inp)
-        self.assertEqual(total, 6)
+    def test_default_keywords(self):
+        kws = self.config.default_keywords
+        self.assertIn("Credentials", kws)
+        self.assertIn("Infrastructure", kws)
+        self.assertIn("login", kws["Credentials"])
 
-    def test_calculate_total_empty(self):
-        inp = DorkGeneratorInput(box_entries={}, mode="cartesian")
-        self.assertEqual(self.gen.calculate_total(inp), 0)
+    def test_generation_rules(self):
+        rules = self.config.generation_rules
+        self.assertIn("mutually_exclusive", rules)
+        self.assertIn("max_operators_per_dork", rules)
+
+    def test_engine_display_name(self):
+        self.assertEqual(self.config.get_engine_display_name("google"), "Google")
+        self.assertEqual(self.config.get_engine_display_name("bing"), "Bing")
+
+    def test_nonexistent_engine(self):
+        self.assertIsNone(self.config.get_engine("nonexistent"))
+        self.assertEqual(self.config.get_operators("nonexistent"), {})
+        self.assertEqual(self.config.get_filetypes("nonexistent"), [])
 
 
-class TestDorkGeneratorTemplate(unittest.TestCase):
-    """Test the DorkGenerator in template mode."""
+class TestDorkBuilder(unittest.TestCase):
+    """Test syntax building for each search engine."""
 
     def setUp(self):
-        self.gen = DorkGenerator()
-
-    def test_basic_template(self):
-        """Template with two segments producing correct format."""
-        template = {
-            "segments": [["Op", "Kw"]],
-            "quoted": [],
-        }
-        inp = DorkGeneratorInput(
-            box_entries={
-                "Op": ["intitle:"],
-                "Kw": ["login", "admin"],
-            },
-            mode="template",
-            template=template,
-            requested_count=100,
-            apply_rules=False,
+        config_path = os.path.join(
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+            "config", "default_config.json",
         )
-        result = self.gen.generate(inp)
-        self.assertEqual(len(result.dorks), 2)
-        self.assertIn("intitle:login", result.dorks)
-        self.assertIn("intitle:admin", result.dorks)
+        self.config = DorkConfig(config_path)
 
-    def test_template_with_quoted(self):
-        """Quoted box values should be wrapped in double quotes."""
-        template = {
-            "segments": [["Keyword"]],
-            "quoted": ["Keyword"],
-        }
-        inp = DorkGeneratorInput(
-            box_entries={"Keyword": ["admin panel", "login"]},
-            mode="template",
-            template=template,
-            requested_count=100,
-            apply_rules=False,
-        )
-        result = self.gen.generate(inp)
-        self.assertEqual(len(result.dorks), 2)
-        self.assertIn('"admin panel"', result.dorks)
-        self.assertIn('"login"', result.dorks)
+    def test_google_operator_term(self):
+        builder = DorkBuilder(self.config, "google")
+        self.assertEqual(builder.build_operator_term("intitle", "login"), "intitle:login")
+        self.assertEqual(builder.build_operator_term("filetype", "pdf"), "filetype:pdf")
+        self.assertEqual(builder.build_operator_term("site", "example.com"), "site:example.com")
 
-    def test_multi_segment_template(self):
-        """Template with multiple segments joined by space."""
-        template = {
-            "segments": [
-                ["Op", "Kw"],
-                ["FileOp", "File"],
-            ],
-            "quoted": [],
-        }
-        inp = DorkGeneratorInput(
-            box_entries={
-                "Op": ["intitle:"],
-                "Kw": ["login"],
-                "FileOp": ["filetype:"],
-                "File": ["php"],
-            },
-            mode="template",
-            template=template,
-            requested_count=100,
-            apply_rules=False,
-        )
-        result = self.gen.generate(inp)
-        self.assertEqual(len(result.dorks), 1)
-        self.assertEqual(result.dorks[0], "intitle:login filetype:php")
+    def test_bing_operator_term(self):
+        builder = DorkBuilder(self.config, "bing")
+        self.assertEqual(builder.build_operator_term("intitle", "admin"), "intitle:admin")
+        self.assertEqual(builder.build_operator_term("inbody", "password"), "inbody:password")
 
-    def test_template_missing_box(self):
-        """Missing box entries should produce zero results."""
-        template = {
-            "segments": [["Op", "MissingBox"]],
-            "quoted": [],
-        }
-        inp = DorkGeneratorInput(
-            box_entries={"Op": ["intitle:"]},
-            mode="template",
-            template=template,
-            requested_count=100,
-            apply_rules=False,
-        )
-        result = self.gen.generate(inp)
-        self.assertEqual(len(result.dorks), 0)
+    def test_google_join_terms_and(self):
+        """Google AND = space."""
+        builder = DorkBuilder(self.config, "google")
+        result = builder.join_terms(["intitle:login", "filetype:php"], "AND")
+        self.assertEqual(result, "intitle:login filetype:php")
 
-    def test_template_total_calculation(self):
-        """Total should account for unique boxes across segments."""
-        template = {
-            "segments": [["A", "B"], ["A", "C"]],
-            "quoted": [],
-        }
-        inp = DorkGeneratorInput(
-            box_entries={
-                "A": ["a1", "a2"],
-                "B": ["b1", "b2"],
-                "C": ["c1", "c2"],
-            },
-            mode="template",
-            template=template,
-        )
-        # A is shared: 2 * 2 * 2 = 8
-        total = self.gen.calculate_total(inp)
-        self.assertEqual(total, 8)
+    def test_bing_join_terms_and(self):
+        """Bing AND = ' AND '."""
+        builder = DorkBuilder(self.config, "bing")
+        result = builder.join_terms(["intitle:login", "filetype:php"], "AND")
+        self.assertEqual(result, "intitle:login AND filetype:php")
+
+    def test_google_join_terms_or(self):
+        builder = DorkBuilder(self.config, "google")
+        result = builder.join_terms(["login", "admin"], "OR")
+        self.assertEqual(result, "login OR admin")
+
+    def test_bing_join_terms_or(self):
+        builder = DorkBuilder(self.config, "bing")
+        result = builder.join_terms(["login", "admin"], "OR")
+        self.assertEqual(result, "login OR admin")
+
+    def test_google_quote_value(self):
+        builder = DorkBuilder(self.config, "google")
+        self.assertEqual(builder.quote_value("admin panel"), '"admin panel"')
+
+    def test_bing_quote_value(self):
+        builder = DorkBuilder(self.config, "bing")
+        self.assertEqual(builder.quote_value("admin panel"), '"admin panel"')
+
+    def test_google_negate_term(self):
+        builder = DorkBuilder(self.config, "google")
+        result = builder.negate_term("facebook.com")
+        self.assertEqual(result, "-facebook.com")
+
+    def test_bing_negate_term(self):
+        builder = DorkBuilder(self.config, "bing")
+        result = builder.negate_term("facebook.com")
+        self.assertEqual(result, "NOTfacebook.com")
+
+    def test_unknown_operator_returns_value(self):
+        builder = DorkBuilder(self.config, "google")
+        result = builder.build_operator_term("nonexistent", "test")
+        self.assertEqual(result, "test")
 
 
-class TestDorkGeneratorMixAll(unittest.TestCase):
-    """Test the DorkGenerator in mix-all mode."""
+class TestDorkValidator(unittest.TestCase):
+    """Test dork validation rules."""
 
     def setUp(self):
-        self.gen = DorkGenerator()
-
-    def test_mix_all_combines_templates(self):
-        """Mix all should produce dorks from multiple templates."""
-        templates = [
-            {"segments": [["A"]], "quoted": []},
-            {"segments": [["B"]], "quoted": []},
-        ]
-        inp = DorkGeneratorInput(
-            box_entries={"A": ["alpha"], "B": ["beta"]},
-            mode="mix_all",
-            templates_all=templates,
-            requested_count=100,
-            apply_rules=False,
+        config_path = os.path.join(
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+            "config", "default_config.json",
         )
-        result = self.gen.generate(inp)
-        self.assertEqual(len(result.dorks), 2)
-        self.assertIn("alpha", result.dorks)
-        self.assertIn("beta", result.dorks)
+        self.config = DorkConfig(config_path)
+        self.validator = DorkValidator(self.config)
 
-    def test_mix_all_deduplication(self):
-        """Overlapping templates should be deduplicated."""
-        templates = [
-            {"segments": [["A"]], "quoted": []},
-            {"segments": [["A"]], "quoted": []},  # same template
-        ]
-        inp = DorkGeneratorInput(
-            box_entries={"A": ["same_value"]},
-            mode="mix_all",
-            templates_all=templates,
-            requested_count=100,
-            apply_rules=False,
-        )
-        result = self.gen.generate(inp)
-        self.assertEqual(len(result.dorks), 1)
+    def test_valid_simple_dork(self):
+        self.assertTrue(self.validator.is_valid("intitle:login", "google"))
 
-    def test_mix_all_skips_unsatisfied(self):
-        """Templates missing required boxes should be skipped."""
-        templates = [
-            {"segments": [["A"]], "quoted": []},
-            {"segments": [["Missing"]], "quoted": []},
-        ]
-        inp = DorkGeneratorInput(
-            box_entries={"A": ["value"]},
-            mode="mix_all",
-            templates_all=templates,
-            requested_count=100,
-            apply_rules=False,
-        )
-        result = self.gen.generate(inp)
-        self.assertEqual(len(result.dorks), 1)
-        self.assertIn("value", result.dorks)
+    def test_valid_multi_operator(self):
+        self.assertTrue(self.validator.is_valid("intitle:login filetype:php", "google"))
 
+    def test_empty_dork_invalid(self):
+        self.assertFalse(self.validator.is_valid("", "google"))
 
-# ═════════════════════════════════════════════
-# Test Operator Rules
-# ═════════════════════════════════════════════
-class TestOperatorRules(unittest.TestCase):
-    """Test intelligent filtering rules."""
-
-    def setUp(self):
-        self.rules = OperatorRules()
+    def test_whitespace_dork_invalid(self):
+        self.assertFalse(self.validator.is_valid("   ", "google"))
 
     def test_mutually_exclusive_filetype_ext(self):
-        """filetype: and ext: should not appear together."""
-        parts = ["filetype:pdf", "ext:doc"]
-        self.assertFalse(self.rules.is_valid_combination(parts))
-
-    def test_valid_single_filetype(self):
-        """A single filetype: is valid."""
-        parts = ["intitle:login", "filetype:pdf"]
-        self.assertTrue(self.rules.is_valid_combination(parts))
-
-    def test_duplicate_operator_invalid(self):
-        """Two intitle: operators in one query is invalid."""
-        parts = ["intitle:login", "intitle:admin"]
-        self.assertFalse(self.rules.is_valid_combination(parts))
-
-    def test_valid_different_operators(self):
-        """Different operators should be valid together."""
-        parts = ["intitle:login", "filetype:php"]
-        self.assertTrue(self.rules.is_valid_combination(parts))
-
-    def test_conflicting_pairs(self):
-        """intitle: and inurl: with same query should conflict."""
-        parts = ["intitle:login", "inurl:admin"]
-        # This is a conflicting pair
-        self.assertFalse(self.rules.is_valid_combination(parts))
-
-    def test_filter_dorks(self):
-        """filter_dorks should remove invalid combinations."""
-        dorks = [
-            "intitle:login filetype:php",     # valid
-            "filetype:pdf ext:doc",            # invalid (mutually exclusive)
-            "intitle:admin",                   # valid
-            "intitle:x intitle:y",             # invalid (duplicate)
-        ]
-        valid, removed = self.rules.filter_dorks(dorks)
-        self.assertEqual(removed, 2)
-        self.assertEqual(len(valid), 2)
-        self.assertIn("intitle:login filetype:php", valid)
-        self.assertIn("intitle:admin", valid)
+        self.assertFalse(self.validator.is_valid("filetype:pdf ext:doc", "google"))
 
     def test_mutually_exclusive_intitle_allintitle(self):
-        """intitle: and allintitle: are mutually exclusive."""
-        parts = ["intitle:test", "allintitle:other"]
-        self.assertFalse(self.rules.is_valid_combination(parts))
+        self.assertFalse(self.validator.is_valid("intitle:test allintitle:other", "google"))
 
-    def test_empty_dork_valid(self):
-        """An empty list is technically valid."""
-        self.assertTrue(self.rules.is_valid_combination([]))
+    def test_duplicate_operator_invalid(self):
+        self.assertFalse(self.validator.is_valid("intitle:login intitle:admin", "google"))
 
-    def test_no_operator_valid(self):
-        """Plain text with no operators is valid."""
-        parts = ["login", "admin"]
-        self.assertTrue(self.rules.is_valid_combination(parts))
+    def test_duplicate_site_valid(self):
+        """Multiple site: operators should be valid."""
+        self.assertTrue(self.validator.is_valid("site:a.com site:b.com", "google"))
 
+    def test_too_long_dork_invalid(self):
+        long_dork = "intitle:" + "a" * 300
+        self.assertFalse(self.validator.is_valid(long_dork, "google"))
 
-class TestOperatorRulesCustom(unittest.TestCase):
-    """Test OperatorRules with custom rules."""
-
-    def test_custom_exclusive(self):
-        rules = OperatorRules({
-            "mutually_exclusive": [{"foo:", "bar:"}],
-            "conflicting_pairs": [],
-            "requires_value": [],
-            "domain_operators": [],
-            "filetype_operators": [],
-        })
-        self.assertFalse(rules.is_valid_combination(["foo:x", "bar:y"]))
-        self.assertTrue(rules.is_valid_combination(["foo:x", "baz:y"]))
+    def test_plain_keyword_valid(self):
+        self.assertTrue(self.validator.is_valid("login admin", "google"))
 
 
-# ═════════════════════════════════════════════
-# Test Validation
-# ═════════════════════════════════════════════
-class TestDorkGeneratorValidation(unittest.TestCase):
-    """Test input validation."""
+class TestDorkGenerator(unittest.TestCase):
+    """Test end-to-end dork generation."""
 
     def setUp(self):
-        self.gen = DorkGenerator()
-
-    def test_empty_input_invalid(self):
-        inp = DorkGeneratorInput(box_entries={}, mode="cartesian")
-        ok, msg = self.gen.validate_input(inp)
-        self.assertFalse(ok)
-
-    def test_single_box_cartesian_invalid(self):
-        """Cartesian mode needs at least 2 boxes."""
-        inp = DorkGeneratorInput(
-            box_entries={"A": ["test"]},
-            mode="cartesian",
+        config_path = os.path.join(
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+            "config", "default_config.json",
         )
-        ok, msg = self.gen.validate_input(inp)
-        self.assertFalse(ok)
+        self.config = DorkConfig(config_path)
+        self.gen = DorkGenerator(self.config)
 
-    def test_two_boxes_cartesian_valid(self):
-        inp = DorkGeneratorInput(
-            box_entries={"A": ["test"], "B": ["other"]},
-            mode="cartesian",
+    def test_basic_google_generation(self):
+        result = self.gen.generate(
+            engine_id="google",
+            keywords=["login", "admin"],
+            selected_operators=["intitle"],
         )
-        ok, msg = self.gen.validate_input(inp)
-        self.assertTrue(ok)
+        self.assertGreater(len(result["dorks"]), 0)
+        self.assertEqual(result["engine"], "google")
+        for d in result["dorks"]:
+            self.assertIn("intitle:", d)
 
-    def test_template_missing_box_invalid(self):
-        template = {"segments": [["A", "Missing"]], "quoted": []}
-        inp = DorkGeneratorInput(
-            box_entries={"A": ["test"]},
-            mode="template",
-            template=template,
+    def test_google_with_filetype(self):
+        result = self.gen.generate(
+            engine_id="google",
+            keywords=["login"],
+            selected_operators=["intitle"],
+            selected_filetypes=["php"],
         )
-        ok, msg = self.gen.validate_input(inp)
-        self.assertFalse(ok)
-        self.assertIn("Missing", msg)
+        self.assertGreater(len(result["dorks"]), 0)
+        has_filetype = any("filetype:php" in d for d in result["dorks"])
+        self.assertTrue(has_filetype)
 
-    def test_template_no_template_invalid(self):
-        inp = DorkGeneratorInput(
-            box_entries={"A": ["test"]},
-            mode="template",
-            template=None,
+    def test_google_with_site(self):
+        result = self.gen.generate(
+            engine_id="google",
+            keywords=["admin"],
+            selected_operators=["intitle"],
+            custom_site="example.com",
         )
-        ok, msg = self.gen.validate_input(inp)
-        self.assertFalse(ok)
+        self.assertGreater(len(result["dorks"]), 0)
+        for d in result["dorks"]:
+            self.assertIn("site:example.com", d)
 
-    def test_mix_all_no_templates_invalid(self):
-        inp = DorkGeneratorInput(
-            box_entries={"A": ["test"]},
-            mode="mix_all",
-            templates_all=[],
+    def test_google_with_quotes(self):
+        result = self.gen.generate(
+            engine_id="google",
+            keywords=["admin panel"],
+            use_quotes=True,
         )
-        ok, msg = self.gen.validate_input(inp)
-        self.assertFalse(ok)
+        self.assertGreater(len(result["dorks"]), 0)
+        for d in result["dorks"]:
+            self.assertIn('"admin panel"', d)
 
-    def test_negative_count_invalid(self):
-        inp = DorkGeneratorInput(
-            box_entries={"A": ["test"], "B": ["other"]},
-            mode="cartesian",
-            requested_count=-1,
+    def test_google_with_exclusions(self):
+        result = self.gen.generate(
+            engine_id="google",
+            keywords=["login"],
+            selected_operators=["intitle"],
+            include_exclusions=["facebook.com"],
         )
-        ok, msg = self.gen.validate_input(inp)
-        self.assertFalse(ok)
+        self.assertGreater(len(result["dorks"]), 0)
+        for d in result["dorks"]:
+            self.assertIn("-facebook.com", d)
 
-
-# ═════════════════════════════════════════════
-# Test Progress Callback
-# ═════════════════════════════════════════════
-class TestDorkGeneratorProgress(unittest.TestCase):
-    """Test that progress callbacks are invoked."""
-
-    def test_progress_callback_called(self):
-        gen = DorkGenerator()
-        progress_calls = []
-
-        def on_progress(current, total):
-            progress_calls.append((current, total))
-
-        inp = DorkGeneratorInput(
-            box_entries={
-                "A": [f"a{i}" for i in range(100)],
-                "B": [f"b{i}" for i in range(100)],
-            },
-            mode="cartesian",
-            requested_count=10000,
-            apply_rules=False,
+    def test_bing_generation(self):
+        result = self.gen.generate(
+            engine_id="bing",
+            keywords=["login"],
+            selected_operators=["intitle"],
         )
-        gen.generate(inp, on_progress)
-        # With 10000 items, progress should be called at least once
-        self.assertGreater(len(progress_calls), 0)
+        self.assertGreater(len(result["dorks"]), 0)
+        self.assertEqual(result["engine"], "bing")
+        # Bing uses AND joiner
+        self.assertEqual(result["engine_name"], "Bing")
+
+    def test_bing_with_filetype(self):
+        result = self.gen.generate(
+            engine_id="bing",
+            keywords=["config"],
+            selected_operators=["intitle"],
+            selected_filetypes=["php"],
+        )
+        self.assertGreater(len(result["dorks"]), 0)
+        has_filetype = any("filetype:php" in d for d in result["dorks"])
+        self.assertTrue(has_filetype)
+
+    def test_duckduckgo_generation(self):
+        result = self.gen.generate(
+            engine_id="duckduckgo",
+            keywords=["password"],
+            selected_operators=["intitle"],
+        )
+        self.assertGreater(len(result["dorks"]), 0)
+        self.assertEqual(result["engine"], "duckduckgo")
+
+    def test_yahoo_generation(self):
+        result = self.gen.generate(
+            engine_id="yahoo",
+            keywords=["admin"],
+            selected_operators=["intitle"],
+        )
+        self.assertGreater(len(result["dorks"]), 0)
+        self.assertEqual(result["engine"], "yahoo")
+
+    def test_empty_keywords(self):
+        result = self.gen.generate(
+            engine_id="google",
+            keywords=[],
+        )
+        self.assertEqual(len(result["dorks"]), 0)
+        self.assertGreater(len(result["warnings"]), 0)
+
+    def test_invalid_operator_warning(self):
+        result = self.gen.generate(
+            engine_id="duckduckgo",
+            keywords=["login"],
+            selected_operators=["cache"],  # Not available in DDG
+        )
+        has_warning = any("not available" in w.lower() for w in result["warnings"])
+        self.assertTrue(has_warning)
+
+    def test_max_results_limit(self):
+        result = self.gen.generate(
+            engine_id="google",
+            keywords=[f"kw{i}" for i in range(50)],
+            selected_operators=["intitle", "inurl"],
+            max_results=10,
+        )
+        self.assertLessEqual(len(result["dorks"]), 10)
+
+    def test_no_duplicate_dorks(self):
+        result = self.gen.generate(
+            engine_id="google",
+            keywords=["login", "login"],  # Duplicate keyword
+            selected_operators=["intitle"],
+        )
+        self.assertEqual(len(result["dorks"]), len(set(result["dorks"])))
+
+    def test_dork_spacing_correct(self):
+        """Ensure no double spaces or leading/trailing whitespace."""
+        result = self.gen.generate(
+            engine_id="google",
+            keywords=["login", "admin"],
+            selected_operators=["intitle"],
+            selected_filetypes=["php"],
+            custom_site="example.com",
+            include_exclusions=["facebook.com"],
+        )
+        for d in result["dorks"]:
+            self.assertEqual(d.strip(), d, f"Leading/trailing whitespace in: '{d}'")
+            self.assertNotIn("  ", d, f"Double space in: '{d}'")
 
 
-# ═════════════════════════════════════════════
-# Test AppState
-# ═════════════════════════════════════════════
-class TestAppState(unittest.TestCase):
-    """Test centralized state management."""
+class TestMultiEngineSyntax(unittest.TestCase):
+    """Test that each engine produces syntactically correct dorks."""
 
     def setUp(self):
-        self.state = AppState()
-
-    def test_add_box(self):
-        box = self.state.dispatch(Action.ADD_BOX, name="Test Box")
-        self.assertIsInstance(box, BoxState)
-        self.assertEqual(box.name, "Test Box")
-        self.assertEqual(len(self.state.boxes), 1)
-        self.assertEqual(self.state.boxes[0].uid, box.uid)
-
-    def test_add_multiple_boxes(self):
-        self.state.dispatch(Action.ADD_BOX, name="Box 1")
-        self.state.dispatch(Action.ADD_BOX, name="Box 2")
-        self.state.dispatch(Action.ADD_BOX, name="Box 3")
-        self.assertEqual(self.state.box_count, 3)
-
-    def test_remove_box(self):
-        box = self.state.dispatch(Action.ADD_BOX, name="ToRemove")
-        uid = box.uid
-        result = self.state.dispatch(Action.REMOVE_BOX, uid=uid)
-        self.assertTrue(result)
-        self.assertEqual(len(self.state.boxes), 0)
-
-    def test_remove_nonexistent_box(self):
-        result = self.state.dispatch(Action.REMOVE_BOX, uid=999)
-        self.assertFalse(result)
-
-    def test_update_entries(self):
-        box = self.state.dispatch(Action.ADD_BOX, name="Test")
-        self.state.dispatch(
-            Action.UPDATE_BOX_ENTRIES,
-            uid=box.uid,
-            entries=["entry1", "entry2"],
+        config_path = os.path.join(
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+            "config", "default_config.json",
         )
-        self.assertEqual(box.entries, ["entry1", "entry2"])
-        self.assertEqual(box.entry_count, 2)
+        self.config = DorkConfig(config_path)
+        self.gen = DorkGenerator(self.config)
 
-    def test_toggle_box(self):
-        box = self.state.dispatch(Action.ADD_BOX, name="Test", enabled=True)
-        self.assertTrue(box.enabled)
-        self.state.dispatch(Action.TOGGLE_BOX, uid=box.uid, enabled=False)
-        self.assertFalse(box.enabled)
-        self.state.dispatch(Action.TOGGLE_BOX, uid=box.uid)
-        self.assertTrue(box.enabled)
-
-    def test_rename_box(self):
-        box = self.state.dispatch(Action.ADD_BOX, name="OldName")
-        self.state.dispatch(Action.RENAME_BOX, uid=box.uid, name="NewName")
-        self.assertEqual(box.name, "NewName")
-
-    def test_move_box(self):
-        box1 = self.state.dispatch(Action.ADD_BOX, name="First")
-        box2 = self.state.dispatch(Action.ADD_BOX, name="Second")
-        self.assertEqual(self.state.boxes[0].uid, box1.uid)
-        self.state.dispatch(Action.MOVE_BOX, uid=box1.uid, direction=1)
-        self.assertEqual(self.state.boxes[0].uid, box2.uid)
-        self.assertEqual(self.state.boxes[1].uid, box1.uid)
-
-    def test_move_box_out_of_bounds(self):
-        box = self.state.dispatch(Action.ADD_BOX, name="Only")
-        self.state.dispatch(Action.MOVE_BOX, uid=box.uid, direction=-1)
-        # Should not crash, box stays in place
-        self.assertEqual(len(self.state.boxes), 1)
-
-    def test_active_entries(self):
-        box1 = self.state.dispatch(
-            Action.ADD_BOX, name="Op", entries=["intitle:"], enabled=True,
+    def test_google_syntax(self):
+        """Google: operators are joined by space."""
+        result = self.gen.generate(
+            engine_id="google",
+            keywords=["login"],
+            selected_operators=["intitle"],
+            selected_filetypes=["php"],
+            shuffle=False,
         )
-        box2 = self.state.dispatch(
-            Action.ADD_BOX, name="Kw", entries=["login"], enabled=True,
+        for d in result["dorks"]:
+            # Google AND is space, no "AND" keyword
+            self.assertNotIn(" AND ", d)
+            parts = d.split()
+            for p in parts:
+                if ":" in p:
+                    # operator:value format
+                    op_val = p.split(":", 1)
+                    self.assertEqual(len(op_val), 2)
+
+    def test_bing_syntax(self):
+        """Bing: operators are joined by ' AND '."""
+        result = self.gen.generate(
+            engine_id="bing",
+            keywords=["login"],
+            selected_operators=["intitle"],
+            selected_filetypes=["php"],
+            shuffle=False,
         )
-        box3 = self.state.dispatch(
-            Action.ADD_BOX, name="Disabled", entries=["test"], enabled=False,
+        for d in result["dorks"]:
+            # Bing uses AND
+            if "intitle:" in d and "filetype:" in d:
+                self.assertIn(" AND ", d)
+
+    def test_duckduckgo_syntax(self):
+        """DuckDuckGo: space-separated like Google."""
+        result = self.gen.generate(
+            engine_id="duckduckgo",
+            keywords=["login"],
+            selected_operators=["intitle"],
+            shuffle=False,
         )
-        entries = self.state.active_entries
-        self.assertIn("Op", entries)
-        self.assertIn("Kw", entries)
-        self.assertNotIn("Disabled", entries)
+        for d in result["dorks"]:
+            self.assertNotIn(" AND ", d)
 
-    def test_active_box_count(self):
-        self.state.dispatch(Action.ADD_BOX, name="A", enabled=True)
-        self.state.dispatch(Action.ADD_BOX, name="B", enabled=False)
-        self.state.dispatch(Action.ADD_BOX, name="C", enabled=True)
-        self.assertEqual(self.state.active_box_count, 2)
-        self.assertEqual(self.state.box_count, 3)
-
-
-class TestAppStateTemplates(unittest.TestCase):
-    """Test template-related state management."""
-
-    def setUp(self):
-        self.state = AppState()
-
-    def test_set_cartesian_template(self):
-        self.state.dispatch(Action.SET_TEMPLATE, idx=None)
-        self.assertEqual(self.state.generation.mode, "cartesian")
-        self.assertIsNone(self.state.generation.active_template_idx)
-
-    def test_set_specific_template(self):
-        self.state.dispatch(Action.SET_TEMPLATE, idx=0)
-        self.assertEqual(self.state.generation.mode, "template")
-        self.assertEqual(self.state.generation.active_template_idx, 0)
-
-    def test_set_mix_all_template(self):
-        self.state.dispatch(Action.SET_TEMPLATE, idx=-2)
-        self.assertEqual(self.state.generation.mode, "mix_all")
-        self.assertEqual(self.state.generation.active_template_idx, -2)
-
-    def test_set_count(self):
-        self.state.dispatch(Action.SET_COUNT, count=500)
-        self.assertEqual(self.state.generation.requested_count, 500)
-
-    def test_set_count_minimum(self):
-        self.state.dispatch(Action.SET_COUNT, count=-10)
-        self.assertEqual(self.state.generation.requested_count, 1)
-
-    def test_toggle_rules(self):
-        self.assertTrue(self.state.generation.apply_rules)
-        self.state.dispatch(Action.TOGGLE_RULES)
-        self.assertFalse(self.state.generation.apply_rules)
-        self.state.dispatch(Action.TOGGLE_RULES)
-        self.assertTrue(self.state.generation.apply_rules)
-
-
-class TestAppStateResults(unittest.TestCase):
-    """Test results state management."""
-
-    def setUp(self):
-        self.state = AppState()
-
-    def test_set_results(self):
-        dorks = ["dork1", "dork2", "dork3"]
-        self.state.dispatch(
-            Action.SET_RESULTS,
-            dorks=dorks,
-            total_possible=10,
-            total_generated=5,
-            total_filtered=2,
+    def test_yahoo_syntax(self):
+        """Yahoo: uses AND for joining."""
+        result = self.gen.generate(
+            engine_id="yahoo",
+            keywords=["login"],
+            selected_operators=["intitle"],
+            selected_filetypes=["pdf"],
+            shuffle=False,
         )
-        self.assertEqual(len(self.state.results.all_dorks), 3)
-        self.assertEqual(len(self.state.results.filtered_dorks), 3)
-        self.assertEqual(self.state.results.total_possible, 10)
-        self.assertEqual(self.state.results.total_filtered, 2)
+        for d in result["dorks"]:
+            if "intitle:" in d and "filetype:" in d:
+                self.assertIn(" AND ", d)
 
-    def test_search_filter(self):
-        self.state.dispatch(
-            Action.SET_RESULTS,
-            dorks=["intitle:login", "inurl:admin", "filetype:pdf"],
-        )
-        self.state.dispatch(Action.SET_SEARCH, term="intitle")
-        self.assertEqual(len(self.state.results.filtered_dorks), 1)
-        self.assertEqual(
-            self.state.results.filtered_dorks[0], "intitle:login",
-        )
-
-    def test_search_case_insensitive(self):
-        self.state.dispatch(
-            Action.SET_RESULTS,
-            dorks=["INTITLE:LOGIN", "inurl:admin"],
-        )
-        self.state.dispatch(Action.SET_SEARCH, term="intitle")
-        self.assertEqual(len(self.state.results.filtered_dorks), 1)
-
-    def test_clear_search_restores_all(self):
-        self.state.dispatch(
-            Action.SET_RESULTS,
-            dorks=["dork1", "dork2", "dork3"],
-        )
-        self.state.dispatch(Action.SET_SEARCH, term="dork1")
-        self.assertEqual(len(self.state.results.filtered_dorks), 1)
-        self.state.dispatch(Action.SET_SEARCH, term="")
-        self.assertEqual(len(self.state.results.filtered_dorks), 3)
-
-    def test_sort_results(self):
-        self.state.dispatch(
-            Action.SET_RESULTS,
-            dorks=["charlie", "alpha", "bravo"],
-        )
-        self.state.dispatch(Action.SORT_RESULTS)
-        self.assertEqual(
-            self.state.results.filtered_dorks,
-            ["alpha", "bravo", "charlie"],
-        )
-
-    def test_clear_results(self):
-        self.state.dispatch(
-            Action.SET_RESULTS, dorks=["dork1", "dork2"],
-        )
-        self.state.dispatch(Action.CLEAR_RESULTS)
-        self.assertEqual(len(self.state.results.all_dorks), 0)
-        self.assertEqual(len(self.state.results.filtered_dorks), 0)
-
-
-class TestAppStateSubscription(unittest.TestCase):
-    """Test the observer/subscription pattern."""
-
-    def test_subscriber_notified(self):
-        state = AppState()
-        notifications = []
-        state.subscribe("boxes", lambda: notifications.append("boxes"))
-        state.dispatch(Action.ADD_BOX, name="Test")
-        self.assertIn("boxes", notifications)
-
-    def test_subscriber_not_notified_wrong_channel(self):
-        state = AppState()
-        notifications = []
-        state.subscribe("results", lambda: notifications.append("results"))
-        state.dispatch(Action.ADD_BOX, name="Test")
-        self.assertNotIn("results", notifications)
-
-    def test_all_channel_always_notified(self):
-        state = AppState()
-        notifications = []
-        state.subscribe("all", lambda: notifications.append("all"))
-        state.dispatch(Action.ADD_BOX, name="Test")
-        state.dispatch(Action.SET_COUNT, count=50)
-        self.assertEqual(len(notifications), 2)
-
-    def test_unsubscribe(self):
-        state = AppState()
-        notifications = []
-        cb = lambda: notifications.append("called")
-        state.subscribe("boxes", cb)
-        state.dispatch(Action.ADD_BOX, name="Test1")
-        self.assertEqual(len(notifications), 1)
-        state.unsubscribe("boxes", cb)
-        state.dispatch(Action.ADD_BOX, name="Test2")
-        self.assertEqual(len(notifications), 1)
-
-    def test_action_log(self):
-        state = AppState()
-        state.dispatch(Action.ADD_BOX, name="TestBox")
-        state.dispatch(Action.SET_COUNT, count=200)
-        log = state.action_log
-        self.assertEqual(len(log), 2)
-        self.assertIn("ADD_BOX", log[0])
-        self.assertIn("SET_COUNT", log[1])
-
-
-class TestAppStateSerialization(unittest.TestCase):
-    """Test save/load of state."""
-
-    def test_to_dict_and_from_dict(self):
-        state = AppState()
-        state.dispatch(Action.ADD_BOX, name="OpBox", entries=["intitle:", "inurl:"])
-        state.dispatch(Action.ADD_BOX, name="KwBox", entries=["login", "admin"])
-        state.dispatch(Action.SET_COUNT, count=250)
-
-        data = state.to_dict()
-        self.assertEqual(len(data["boxes"]), 2)
-        self.assertEqual(data["boxes"][0]["name"], "OpBox")
-        self.assertEqual(data["generation"]["requested_count"], 250)
-
-        # Restore
-        restored = AppState.from_dict(data)
-        self.assertEqual(len(restored.boxes), 2)
-        self.assertEqual(restored.boxes[0].name, "OpBox")
-        self.assertEqual(restored.boxes[0].entries, ["intitle:", "inurl:"])
-
-    def test_empty_state_serialization(self):
-        state = AppState()
-        data = state.to_dict()
-        self.assertEqual(len(data["boxes"]), 0)
-        restored = AppState.from_dict(data)
-        self.assertEqual(len(restored.boxes), 0)
-
-
-# ═════════════════════════════════════════════
-# Test BoxState Dataclass
-# ═════════════════════════════════════════════
-class TestBoxState(unittest.TestCase):
-    def test_is_active_enabled_with_entries(self):
-        box = BoxState(uid=1, name="Test", entries=["a", "b"], enabled=True)
-        self.assertTrue(box.is_active)
-
-    def test_is_active_disabled(self):
-        box = BoxState(uid=1, name="Test", entries=["a"], enabled=False)
-        self.assertFalse(box.is_active)
-
-    def test_is_active_empty_entries(self):
-        box = BoxState(uid=1, name="Test", entries=[], enabled=True)
-        self.assertFalse(box.is_active)
-
-    def test_entry_count(self):
-        box = BoxState(uid=1, name="Test", entries=["a", "b", "c"])
-        self.assertEqual(box.entry_count, 3)
-
-
-# ═════════════════════════════════════════════
-# Test with Default Data
-# ═════════════════════════════════════════════
-class TestWithDefaultData(unittest.TestCase):
-    """Integration tests using the actual default templates and data."""
-
-    def test_default_templates_valid(self):
-        """All default templates should have valid structure."""
-        for tmpl in DEFAULT_TEMPLATES:
-            self.assertIn("segments", tmpl)
-            self.assertIn("quoted", tmpl)
-            self.assertIsInstance(tmpl["segments"], list)
-            for seg in tmpl["segments"]:
-                self.assertIsInstance(seg, list)
-                for box_name in seg:
-                    self.assertIsInstance(box_name, str)
-
-    def test_default_boxes_generate(self):
-        """Using default boxes with cartesian mode should work."""
-        gen = DorkGenerator()
-        entries = {
-            box["name"]: box["content"]
-            for box in DEFAULT_BOXES
-        }
-        inp = DorkGeneratorInput(
-            box_entries=entries,
-            mode="cartesian",
-            requested_count=10,
-            apply_rules=False,
-        )
-        result = gen.generate(inp)
-        self.assertGreater(len(result.dorks), 0)
-        self.assertLessEqual(len(result.dorks), 10)
-
-    def test_all_templates_with_defaults(self):
-        """Each template should generate at least 1 result with defaults."""
-        gen = DorkGenerator()
-        entries = {
-            box["name"]: box["content"]
-            for box in DEFAULT_BOXES
-        }
-        for tmpl in DEFAULT_TEMPLATES:
-            inp = DorkGeneratorInput(
-                box_entries=entries,
-                mode="template",
-                template=tmpl,
-                requested_count=5,
-                apply_rules=False,
+    def test_all_engines_produce_valid_dorks(self):
+        """Every engine should produce non-empty, trimmed, no-double-space dorks."""
+        for engine_id in self.config.get_all_engine_ids():
+            result = self.gen.generate(
+                engine_id=engine_id,
+                keywords=["login", "admin"],
+                selected_operators=["intitle", "site"],
+                custom_site="example.com",
             )
-            result = gen.generate(inp)
             self.assertGreater(
-                len(result.dorks), 0,
-                f"Template '{tmpl.get('name', tmpl.get('short'))}' produced no results",
+                len(result["dorks"]), 0,
+                f"Engine '{engine_id}' produced no dorks",
             )
+            for d in result["dorks"]:
+                self.assertEqual(d.strip(), d, f"[{engine_id}] Whitespace in: '{d}'")
+                self.assertNotIn("  ", d, f"[{engine_id}] Double space in: '{d}'")
+                self.assertGreater(len(d), 0, f"[{engine_id}] Empty dork")
 
-    def test_mix_all_with_defaults(self):
-        """Mix all should work with default data."""
-        gen = DorkGenerator()
-        entries = {
-            box["name"]: box["content"]
-            for box in DEFAULT_BOXES
-        }
-        inp = DorkGeneratorInput(
-            box_entries=entries,
-            mode="mix_all",
-            templates_all=DEFAULT_TEMPLATES,
-            requested_count=20,
-            apply_rules=False,
+
+class TestDorkGeneratorEdgeCases(unittest.TestCase):
+    """Test edge cases and error handling."""
+
+    def setUp(self):
+        config_path = os.path.join(
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+            "config", "default_config.json",
         )
-        result = gen.generate(inp)
-        self.assertGreater(len(result.dorks), 0)
+        self.config = DorkConfig(config_path)
+        self.gen = DorkGenerator(self.config)
 
-    def test_rules_filtering_with_defaults(self):
-        """Rules filtering should work without crashing on default data."""
-        gen = DorkGenerator()
-        entries = {
-            box["name"]: box["content"]
-            for box in DEFAULT_BOXES
-        }
-        inp = DorkGeneratorInput(
-            box_entries=entries,
-            mode="cartesian",
-            requested_count=100,
-            apply_rules=True,
+    def test_keywords_only(self):
+        """Keywords with no operators or filetypes."""
+        result = self.gen.generate(
+            engine_id="google",
+            keywords=["login", "admin panel"],
         )
-        result = gen.generate(inp)
-        # Should have some results (some may be filtered)
-        self.assertIsInstance(result.dorks, list)
-        self.assertIsInstance(result.total_filtered, int)
+        self.assertEqual(len(result["dorks"]), 2)
 
-
-# ═════════════════════════════════════════════
-# Test DorkGeneratorResult
-# ═════════════════════════════════════════════
-class TestDorkGeneratorResult(unittest.TestCase):
-    def test_result_fields(self):
-        result = DorkGeneratorResult(
-            dorks=["a", "b"],
-            total_possible=10,
-            total_generated=5,
-            total_filtered=3,
-            warnings=["test warning"],
+    def test_filetypes_only(self):
+        """Keywords + filetypes, no operators."""
+        result = self.gen.generate(
+            engine_id="google",
+            keywords=["login"],
+            selected_filetypes=["pdf", "php"],
         )
-        self.assertEqual(len(result.dorks), 2)
-        self.assertEqual(result.total_possible, 10)
-        self.assertEqual(result.total_generated, 5)
-        self.assertEqual(result.total_filtered, 3)
-        self.assertEqual(result.warnings, ["test warning"])
+        self.assertGreater(len(result["dorks"]), 0)
+        for d in result["dorks"]:
+            has_ft = "filetype:pdf" in d or "filetype:php" in d
+            self.assertTrue(has_ft, f"Missing filetype in: '{d}'")
 
-    def test_result_defaults(self):
-        result = DorkGeneratorResult(dorks=[])
-        self.assertEqual(result.total_possible, 0)
-        self.assertEqual(result.warnings, [])
+    def test_whitespace_keywords_stripped(self):
+        result = self.gen.generate(
+            engine_id="google",
+            keywords=["  login  ", "  ", "admin"],
+        )
+        # " " should be filtered, "login" and "admin" should be trimmed
+        for d in result["dorks"]:
+            self.assertNotIn("  ", d)
+
+    def test_nonexistent_engine(self):
+        result = self.gen.generate(
+            engine_id="nonexistent",
+            keywords=["login"],
+        )
+        # Should still return a result (empty with warnings or just keywords)
+        self.assertIsInstance(result["dorks"], list)
+
+    def test_filetype_operator_excluded_from_combo(self):
+        """If 'filetype' is in selected_operators AND filetypes are set,
+        filetype should not be used as a prefix operator."""
+        result = self.gen.generate(
+            engine_id="google",
+            keywords=["login"],
+            selected_operators=["intitle", "filetype"],
+            selected_filetypes=["php"],
+        )
+        for d in result["dorks"]:
+            # Should not have filetype:filetype:php
+            self.assertNotIn("filetype:filetype:", d)
 
 
 if __name__ == "__main__":

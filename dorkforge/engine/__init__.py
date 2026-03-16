@@ -1,574 +1,427 @@
 """
-DorkForge - Core Query Generation Engine
-==========================================
+DorkForge - Core Dork Generation Engine
+========================================
 
-The DorkGenerator is a pure-logic class with ZERO UI dependencies.
-It accepts structured input data and returns generated dork queries.
-
-Design principles:
-    - No tkinter imports, no GUI references
-    - Fully testable with unit tests
-    - Reusable (could power a CLI, web API, etc.)
-    - Implements intelligent rule-based combination with operator precedence
-    - Handles deduplication, filtering, and smart grouping
+Pure-logic engine with ZERO UI dependencies.
+Generates syntactically correct dork queries for multiple search engines
+using operators and keywords loaded from configuration.
 """
 
-import itertools
+import json
+import os
 import random
-import math
-from typing import List, Dict, Set, Tuple, Optional, Callable, Any
+import itertools
+from typing import List, Dict, Optional, Tuple, Set
 
 
-class DorkGeneratorInput:
-    """Immutable data object describing what to generate.
+class DorkConfig:
+    """Loads and manages configuration for search engines, operators, and filetypes."""
 
-    This is the 'contract' between the UI and the engine.
-    The UI collects user choices and packs them here.
+    _instance = None
+
+    @classmethod
+    def get_instance(cls) -> "DorkConfig":
+        if cls._instance is None:
+            cls._instance = cls()
+        return cls._instance
+
+    @classmethod
+    def reset_instance(cls):
+        """Reset singleton (for testing)."""
+        cls._instance = None
+
+    def __init__(self, config_path: Optional[str] = None):
+        if config_path is None:
+            # __file__ = dorkforge/engine/__init__.py
+            # Go up 3 levels: engine/ -> dorkforge/ -> project_root/
+            project_root = os.path.dirname(
+                os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+            )
+            config_path = os.path.join(
+                project_root,
+                "config",
+                "default_config.json",
+            )
+        with open(config_path, "r", encoding="utf-8") as f:
+            self._config = json.load(f)
+
+    @property
+    def search_engines(self) -> Dict:
+        return self._config.get("search_engines", {})
+
+    @property
+    def default_keywords(self) -> Dict[str, List[str]]:
+        return self._config.get("default_keywords", {})
+
+    @property
+    def generation_rules(self) -> Dict:
+        return self._config.get("generation_rules", {})
+
+    def get_engine(self, engine_id: str) -> Optional[Dict]:
+        return self.search_engines.get(engine_id)
+
+    def get_operators(self, engine_id: str) -> Dict:
+        engine = self.get_engine(engine_id)
+        if engine is None:
+            return {}
+        return engine.get("operators", {})
+
+    def get_filetypes(self, engine_id: str) -> List[str]:
+        engine = self.get_engine(engine_id)
+        if engine is None:
+            return []
+        return engine.get("filetype_list", [])
+
+    def get_boolean_ops(self, engine_id: str) -> Dict:
+        engine = self.get_engine(engine_id)
+        if engine is None:
+            return {}
+        return engine.get("boolean_operators", {})
+
+    def get_all_engine_ids(self) -> List[str]:
+        return list(self.search_engines.keys())
+
+    def get_engine_display_name(self, engine_id: str) -> str:
+        engine = self.get_engine(engine_id)
+        if engine is None:
+            return engine_id
+        return engine.get("name", engine_id)
+
+
+class DorkBuilder:
+    """Builds syntactically correct dork queries for a specific search engine.
+
+    Handles spacing, quoting, and operator formatting per engine syntax.
     """
 
-    __slots__ = (
-        "box_entries", "template", "templates_all", "mode",
-        "requested_count", "apply_rules", "shuffle",
-    )
+    def __init__(self, config: DorkConfig, engine_id: str = "google"):
+        self.config = config
+        self.engine_id = engine_id
+        self.engine = config.get_engine(engine_id) or {}
+        self.operators = self.engine.get("operators", {})
+        self.boolean_ops = self.engine.get("boolean_operators", {})
 
-    def __init__(
-        self,
-        box_entries: Dict[str, List[str]],
-        mode: str = "cartesian",
-        template: Optional[Dict] = None,
-        templates_all: Optional[List[Dict]] = None,
-        requested_count: int = 100,
-        apply_rules: bool = True,
-        shuffle: bool = True,
-    ):
+    def build_operator_term(self, operator_key: str, value: str) -> str:
+        """Build a single operator:value term with correct syntax.
+
+        Examples:
+            build_operator_term("intitle", "login")  -> "intitle:login"
+            build_operator_term("filetype", "pdf")    -> "filetype:pdf"
         """
-        Args:
-            box_entries: Mapping of box_name -> list of entry strings.
-            mode: One of 'cartesian', 'template', 'mix_all'.
-            template: A single template dict (for mode='template').
-            templates_all: All templates (for mode='mix_all').
-            requested_count: How many dorks to produce.
-            apply_rules: Whether to apply intelligent filtering rules.
-            shuffle: Whether to shuffle the final output.
+        op_def = self.operators.get(operator_key)
+        if op_def is None:
+            return value
+
+        syntax = op_def["syntax"]
+        return syntax.replace("{value}", value)
+
+    def quote_value(self, value: str) -> str:
+        """Wrap value in quotes using the engine's exact-match syntax."""
+        exact_syntax = self.boolean_ops.get("EXACT", '"{value}"')
+        if exact_syntax is None:
+            return value
+        return exact_syntax.replace("{value}", value)
+
+    def join_terms(self, terms: List[str], operator: str = "AND") -> str:
+        """Join multiple dork terms with the correct boolean connector.
+
+        The connector depends on the search engine:
+          - Google AND = space
+          - Bing AND = " AND "
+          - etc.
         """
-        self.box_entries = box_entries
-        self.mode = mode
-        self.template = template
-        self.templates_all = templates_all or []
-        self.requested_count = requested_count
-        self.apply_rules = apply_rules
-        self.shuffle = shuffle
+        joiner = self.boolean_ops.get(operator, " ")
+        if joiner is None:
+            joiner = " "
+        return joiner.join(terms)
+
+    def negate_term(self, term: str) -> str:
+        """Negate a term using the engine's NOT syntax."""
+        not_syntax = self.boolean_ops.get("NOT", " -")
+        if not_syntax is None:
+            return f"-{term}"
+        return f"{not_syntax.strip()}{term}"
 
 
-class DorkGeneratorResult:
-    """Immutable result object returned by the engine."""
+class DorkValidator:
+    """Validates generated dorks against configuration rules."""
 
-    __slots__ = ("dorks", "total_possible", "total_generated",
-                 "total_filtered", "warnings")
-
-    def __init__(
-        self,
-        dorks: List[str],
-        total_possible: int = 0,
-        total_generated: int = 0,
-        total_filtered: int = 0,
-        warnings: Optional[List[str]] = None,
-    ):
-        self.dorks = dorks
-        self.total_possible = total_possible
-        self.total_generated = total_generated
-        self.total_filtered = total_filtered
-        self.warnings = warnings or []
-
-
-class OperatorRules:
-    """Encapsulates the rules for intelligent combination filtering.
-
-    Knows which operators conflict, which are mutually exclusive,
-    and can validate/filter generated dork strings.
-    """
-
-    def __init__(self, rules: Optional[Dict] = None):
-        if rules is None:
-            from dorkforge.data import OPERATOR_RULES
-            rules = OPERATOR_RULES
-
+    def __init__(self, config: DorkConfig):
+        self.config = config
+        rules = config.generation_rules
         self._mutually_exclusive: List[Set[str]] = [
             set(group) for group in rules.get("mutually_exclusive", [])
         ]
-        self._conflicting_pairs: List[Tuple[str, str]] = [
-            tuple(pair) for pair in rules.get("conflicting_pairs", [])
-        ]
-        self._requires_value: Set[str] = set(rules.get("requires_value", []))
-        self._domain_operators: Set[str] = set(rules.get("domain_operators", []))
-        self._filetype_operators: Set[str] = set(rules.get("filetype_operators", []))
+        self._max_ops = rules.get("max_operators_per_dork", 4)
+        self._max_len = rules.get("max_dork_length", 256)
 
-    def is_valid_combination(self, dork_parts: List[str]) -> bool:
-        """Check if a list of dork segments forms a valid combination.
+    def is_valid(self, dork: str, engine_id: str) -> bool:
+        """Check if a dork string is valid."""
+        if not dork or not dork.strip():
+            return False
 
-        Args:
-            dork_parts: The individual segments of a dork query.
+        if len(dork) > self._max_len:
+            return False
 
-        Returns:
-            True if the combination is valid per the rules.
-        """
-        joined = " ".join(dork_parts).lower()
-        operators_found = []
+        operators_found = self._extract_operators(dork, engine_id)
 
-        for part in dork_parts:
-            part_lower = part.lower().strip()
-            # Extract the operator prefix (everything up to and including ':')
-            if ":" in part_lower:
-                op = part_lower[:part_lower.index(":") + 1]
-                operators_found.append(op)
+        if len(operators_found) > self._max_ops:
+            return False
 
-        # Check mutually exclusive
+        # Check mutually exclusive operators
         for exclusive_group in self._mutually_exclusive:
             found_in_group = [op for op in operators_found if op in exclusive_group]
             if len(set(found_in_group)) > 1:
                 return False
 
-        # Check conflicting pairs
-        for op_a, op_b in self._conflicting_pairs:
-            if op_a in operators_found and op_b in operators_found:
-                return False
-
-        # Check for duplicate operators (e.g., two intitle: in one query)
-        op_counts = {}
+        # Check duplicate non-site operators
+        op_counts: Dict[str, int] = {}
         for op in operators_found:
             op_counts[op] = op_counts.get(op, 0) + 1
         for op, count in op_counts.items():
-            if count > 1 and op not in self._domain_operators:
+            if count > 1 and op != "site":
                 return False
 
         return True
 
-    def filter_dorks(self, dorks: List[str]) -> Tuple[List[str], int]:
-        """Filter a list of dork strings, removing invalid ones.
-
-        Returns:
-            Tuple of (filtered_dorks, count_removed).
-        """
-        valid = []
-        removed = 0
-        for dork in dorks:
-            parts = dork.split()
-            if self.is_valid_combination(parts):
-                valid.append(dork)
-            else:
-                removed += 1
-        return valid, removed
+    def _extract_operators(self, dork: str, engine_id: str) -> List[str]:
+        """Extract operator names from a dork string."""
+        engine_ops = self.config.get_operators(engine_id)
+        operators_found = []
+        parts = dork.split()
+        for part in parts:
+            part_lower = part.lower().strip('"').strip("(").strip(")")
+            if ":" in part_lower:
+                prefix = part_lower.split(":")[0]
+                if prefix in engine_ops:
+                    operators_found.append(prefix)
+        return operators_found
 
 
 class DorkGenerator:
-    """The main query generation engine.
+    """Main dork generation engine.
 
-    Usage:
-        generator = DorkGenerator()
-        input_data = DorkGeneratorInput(
-            box_entries={"Search Operator": ["intitle:", "inurl:"], "Keyword": ["login", "admin"]},
-            mode="cartesian",
-            requested_count=50,
-        )
-        result = generator.generate(input_data)
-        print(result.dorks)
-        print(f"Generated {result.total_generated} dorks")
+    Generates valid dork queries by combining operators, keywords, and
+    filetypes according to the correct syntax for each search engine.
     """
 
-    def __init__(self, rules: Optional[OperatorRules] = None):
-        self.rules = rules or OperatorRules()
-
-    # ── Public API ──
+    def __init__(self, config: Optional[DorkConfig] = None):
+        self.config = config or DorkConfig.get_instance()
+        self.validator = DorkValidator(self.config)
 
     def generate(
         self,
-        input_data: DorkGeneratorInput,
-        progress_callback: Optional[Callable[[int, int], None]] = None,
-    ) -> DorkGeneratorResult:
-        """Generate dork queries based on the input specification.
+        engine_id: str,
+        keywords: List[str],
+        selected_operators: Optional[List[str]] = None,
+        selected_filetypes: Optional[List[str]] = None,
+        custom_site: Optional[str] = None,
+        use_quotes: bool = False,
+        include_exclusions: Optional[List[str]] = None,
+        max_results: int = 100,
+        shuffle: bool = True,
+    ) -> Dict:
+        """Generate dork queries.
 
         Args:
-            input_data: A DorkGeneratorInput with all generation parameters.
-            progress_callback: Optional (current, total) progress reporter.
+            engine_id: Search engine ID (google, bing, duckduckgo, yahoo).
+            keywords: List of target keywords.
+            selected_operators: Operator keys to use (e.g., ["intitle", "inurl"]).
+            selected_filetypes: File extensions to target (e.g., ["pdf", "php"]).
+            custom_site: Optional site: domain restriction.
+            use_quotes: Whether to quote keywords for exact match.
+            include_exclusions: Keywords to negate with NOT operator.
+            max_results: Maximum number of dorks to generate.
+            shuffle: Randomize output order.
 
         Returns:
-            A DorkGeneratorResult with the generated queries and metadata.
+            Dict with 'dorks', 'total_generated', 'engine', 'warnings'.
         """
-        mode = input_data.mode
-        warnings = []
+        builder = DorkBuilder(self.config, engine_id)
+        available_ops = self.config.get_operators(engine_id)
+        warnings: List[str] = []
 
-        if mode == "template":
-            dorks, total_possible = self._generate_template(
-                input_data, progress_callback
-            )
-        elif mode == "mix_all":
-            dorks, total_possible = self._generate_mix_all(
-                input_data, progress_callback
-            )
+        if not keywords:
+            return {
+                "dorks": [],
+                "total_generated": 0,
+                "total_possible": 0,
+                "engine": engine_id,
+                "engine_name": self.config.get_engine_display_name(engine_id),
+                "warnings": ["No keywords provided."],
+            }
+
+        # Validate selected operators exist for this engine
+        if selected_operators:
+            valid_ops = [op for op in selected_operators if op in available_ops]
+            invalid_ops = [op for op in selected_operators if op not in available_ops]
+            if invalid_ops:
+                warnings.append(
+                    f"Operators not available for {engine_id}: {', '.join(invalid_ops)}"
+                )
+            selected_operators = valid_ops
         else:
-            dorks, total_possible = self._generate_cartesian(
-                input_data, progress_callback
-            )
+            selected_operators = []
 
-        total_generated = len(dorks)
+        # Validate filetypes
+        available_filetypes = self.config.get_filetypes(engine_id)
+        if selected_filetypes:
+            valid_ft = [ft for ft in selected_filetypes if ft in available_filetypes]
+            invalid_ft = [ft for ft in selected_filetypes if ft not in available_filetypes]
+            if invalid_ft:
+                warnings.append(
+                    f"Filetypes not available for {engine_id}: {', '.join(invalid_ft)}"
+                )
+            selected_filetypes = valid_ft
+        else:
+            selected_filetypes = []
+
+        # Check filetype operator availability
+        has_filetype_op = "filetype" in available_ops or "ext" in available_ops
+        filetype_op_key = "filetype" if "filetype" in available_ops else "ext"
+        if selected_filetypes and not has_filetype_op:
+            warnings.append(f"Filetype operator not available for {engine_id}.")
+            selected_filetypes = []
+
+        # Build all dork combinations
+        all_dorks: List[str] = []
+
+        # Process keywords
+        processed_keywords = []
+        for kw in keywords:
+            kw = kw.strip()
+            if not kw:
+                continue
+            if use_quotes and " " in kw:
+                processed_keywords.append(builder.quote_value(kw))
+            elif use_quotes:
+                processed_keywords.append(builder.quote_value(kw))
+            else:
+                processed_keywords.append(kw)
+
+        if not processed_keywords:
+            return {
+                "dorks": [],
+                "total_generated": 0,
+                "total_possible": 0,
+                "engine": engine_id,
+                "engine_name": self.config.get_engine_display_name(engine_id),
+                "warnings": ["No valid keywords after processing."],
+            }
+
+        # Build exclusion suffix
+        exclusion_parts = []
+        if include_exclusions:
+            for exc in include_exclusions:
+                exc = exc.strip()
+                if exc:
+                    exclusion_parts.append(builder.negate_term(exc))
+        exclusion_suffix = " ".join(exclusion_parts) if exclusion_parts else ""
+
+        # Site prefix
+        site_prefix = ""
+        if custom_site and custom_site.strip():
+            site_op = available_ops.get("site")
+            if site_op:
+                site_prefix = builder.build_operator_term("site", custom_site.strip())
+
+        # Generate combinations
+        # Strategy: operator + keyword [+ filetype] [+ site] [+ exclusions]
+        if selected_operators and selected_filetypes:
+            # operator:keyword filetype:ext [site:domain] [-exclusions]
+            for op_key, kw, ft in itertools.product(
+                selected_operators, processed_keywords, selected_filetypes
+            ):
+                # Skip filetype operators combined with filetype values
+                if op_key in ("filetype", "ext"):
+                    continue
+                parts = []
+                parts.append(builder.build_operator_term(op_key, kw))
+                parts.append(builder.build_operator_term(filetype_op_key, ft))
+                if site_prefix:
+                    parts.append(site_prefix)
+                dork = builder.join_terms(parts)
+                if exclusion_suffix:
+                    dork = f"{dork} {exclusion_suffix}"
+                all_dorks.append(dork)
+
+            # Also generate filetype-only dorks: keyword filetype:ext
+            for kw, ft in itertools.product(processed_keywords, selected_filetypes):
+                parts = [kw, builder.build_operator_term(filetype_op_key, ft)]
+                if site_prefix:
+                    parts.append(site_prefix)
+                dork = builder.join_terms(parts)
+                if exclusion_suffix:
+                    dork = f"{dork} {exclusion_suffix}"
+                all_dorks.append(dork)
+
+        elif selected_operators:
+            # operator:keyword [site:domain] [-exclusions]
+            for op_key, kw in itertools.product(selected_operators, processed_keywords):
+                parts = [builder.build_operator_term(op_key, kw)]
+                if site_prefix:
+                    parts.append(site_prefix)
+                dork = builder.join_terms(parts)
+                if exclusion_suffix:
+                    dork = f"{dork} {exclusion_suffix}"
+                all_dorks.append(dork)
+
+        elif selected_filetypes:
+            # keyword filetype:ext [site:domain] [-exclusions]
+            for kw, ft in itertools.product(processed_keywords, selected_filetypes):
+                parts = [kw, builder.build_operator_term(filetype_op_key, ft)]
+                if site_prefix:
+                    parts.append(site_prefix)
+                dork = builder.join_terms(parts)
+                if exclusion_suffix:
+                    dork = f"{dork} {exclusion_suffix}"
+                all_dorks.append(dork)
+
+        else:
+            # Just keywords [site:domain] [-exclusions]
+            for kw in processed_keywords:
+                parts = [kw]
+                if site_prefix:
+                    parts.append(site_prefix)
+                dork = builder.join_terms(parts)
+                if exclusion_suffix:
+                    dork = f"{dork} {exclusion_suffix}"
+                all_dorks.append(dork)
 
         # Deduplicate
-        dorks = self._deduplicate(dorks)
+        seen: Set[str] = set()
+        unique_dorks: List[str] = []
+        for d in all_dorks:
+            d_clean = d.strip()
+            if d_clean and d_clean not in seen:
+                seen.add(d_clean)
+                unique_dorks.append(d_clean)
 
-        # Apply intelligent rules filtering
-        total_filtered = 0
-        if input_data.apply_rules:
-            dorks, removed = self.rules.filter_dorks(dorks)
-            total_filtered = removed
-            if removed > 0:
-                warnings.append(
-                    f"Filtered {removed} invalid/redundant combinations "
-                    f"(mutually exclusive operators, conflicts, etc.)"
-                )
+        total_possible = len(unique_dorks)
 
-        # Trim to requested count
-        if len(dorks) > input_data.requested_count:
-            if input_data.shuffle:
-                random.shuffle(dorks)
-            dorks = dorks[:input_data.requested_count]
-        elif input_data.shuffle:
-            random.shuffle(dorks)
+        # Validate
+        valid_dorks: List[str] = []
+        invalid_count = 0
+        for d in unique_dorks:
+            if self.validator.is_valid(d, engine_id):
+                valid_dorks.append(d)
+            else:
+                invalid_count += 1
 
-        return DorkGeneratorResult(
-            dorks=dorks,
-            total_possible=total_possible,
-            total_generated=total_generated,
-            total_filtered=total_filtered,
-            warnings=warnings,
-        )
+        if invalid_count > 0:
+            warnings.append(f"Filtered {invalid_count} invalid combinations.")
 
-    def calculate_total(
-        self,
-        input_data: DorkGeneratorInput,
-    ) -> int:
-        """Calculate the total possible combinations without generating."""
-        mode = input_data.mode
-        if mode == "template":
-            if input_data.template is None:
-                return 0
-            return self._calc_template_total(
-                input_data.template, input_data.box_entries
-            )
-        elif mode == "mix_all":
-            total = 0
-            for tmpl in input_data.templates_all:
-                total += self._calc_template_total(tmpl, input_data.box_entries)
-            return total
-        else:
-            entry_lists = [
-                v for v in input_data.box_entries.values() if v
-            ]
-            return self._calc_cartesian_total(entry_lists)
+        # Shuffle and limit
+        if shuffle:
+            random.shuffle(valid_dorks)
 
-    def validate_input(
-        self, input_data: DorkGeneratorInput
-    ) -> Tuple[bool, str]:
-        """Validate input before generation.
+        result_dorks = valid_dorks[:max_results]
 
-        Returns:
-            Tuple of (is_valid, error_message).
-        """
-        if not input_data.box_entries:
-            return False, "No box entries provided."
-
-        non_empty = {k: v for k, v in input_data.box_entries.items() if v}
-        if len(non_empty) < 2 and input_data.mode == "cartesian":
-            return False, "At least 2 boxes with entries are required for cartesian mode."
-
-        if input_data.mode == "template":
-            if input_data.template is None:
-                return False, "No template selected."
-            missing = self._get_missing_boxes(
-                input_data.template, input_data.box_entries
-            )
-            if missing:
-                return False, (
-                    f"Template requires these boxes with entries: "
-                    f"{', '.join(sorted(missing))}"
-                )
-
-        if input_data.mode == "mix_all":
-            if not input_data.templates_all:
-                return False, "No templates available for mix-all mode."
-            usable = self._get_usable_templates(
-                input_data.templates_all, input_data.box_entries
-            )
-            if not usable:
-                return False, (
-                    "None of the templates can be satisfied with current boxes."
-                )
-
-        if input_data.requested_count <= 0:
-            return False, "Requested count must be positive."
-
-        return True, ""
-
-    # ── Private: Cartesian Mode ──
-
-    @staticmethod
-    def _calc_cartesian_total(entry_lists: List[List[str]]) -> int:
-        if not entry_lists:
-            return 0
-        total = 1
-        for el in entry_lists:
-            if not el:
-                return 0
-            total *= len(el)
-        return total
-
-    def _generate_cartesian(
-        self,
-        input_data: DorkGeneratorInput,
-        progress_callback: Optional[Callable] = None,
-    ) -> Tuple[List[str], int]:
-        entry_lists = [v for v in input_data.box_entries.values() if v]
-        total = self._calc_cartesian_total(entry_lists)
-        if total == 0:
-            return [], 0
-
-        requested = input_data.requested_count
-        if requested >= total or total <= 500_000:
-            results = []
-            for i, combo in enumerate(itertools.product(*entry_lists)):
-                dork = "".join(combo)
-                results.append(dork)
-                if progress_callback and (i + 1) % 5000 == 0:
-                    progress_callback(i + 1, total)
-            if requested < total:
-                random.shuffle(results)
-                results = results[:requested]
-            return results, total
-        else:
-            return self._random_sample(entry_lists, requested, progress_callback), total
-
-    @staticmethod
-    def _random_sample(
-        entry_lists: List[List[str]],
-        count: int,
-        progress_callback: Optional[Callable] = None,
-    ) -> List[str]:
-        results_set = set()
-        attempts = 0
-        max_attempts = count * 10
-        while len(results_set) < count and attempts < max_attempts:
-            combo = tuple(random.choice(el) for el in entry_lists)
-            dork = "".join(combo)
-            if dork not in results_set:
-                results_set.add(dork)
-                if progress_callback and len(results_set) % 2000 == 0:
-                    progress_callback(len(results_set), count)
-            attempts += 1
-        return list(results_set)
-
-    # ── Private: Template Mode ──
-
-    @staticmethod
-    def _calc_template_total(
-        template: Dict, box_entries: Dict[str, List[str]]
-    ) -> int:
-        seen = set()
-        total = 1
-        for seg in template.get("segments", []):
-            for box_name in seg:
-                if box_name not in seen:
-                    entries = box_entries.get(box_name, [])
-                    if not entries:
-                        return 0
-                    total *= len(entries)
-                    seen.add(box_name)
-        return total if seen else 0
-
-    def _generate_template(
-        self,
-        input_data: DorkGeneratorInput,
-        progress_callback: Optional[Callable] = None,
-    ) -> Tuple[List[str], int]:
-        template = input_data.template
-        if template is None:
-            return [], 0
-        return self._generate_from_template(
-            template, input_data.box_entries,
-            input_data.requested_count, progress_callback
-        )
-
-    def _generate_from_template(
-        self,
-        template: Dict,
-        box_entries: Dict[str, List[str]],
-        requested: int,
-        progress_callback: Optional[Callable] = None,
-    ) -> Tuple[List[str], int]:
-        quoted_boxes = set(template.get("quoted", []))
-        seen = {}
-        ordered_names = []
-        entry_lists = []
-
-        for seg in template["segments"]:
-            for box_name in seg:
-                if box_name not in seen:
-                    entries = box_entries.get(box_name, [])
-                    if not entries:
-                        return [], 0
-                    seen[box_name] = len(ordered_names)
-                    ordered_names.append(box_name)
-                    entry_lists.append(entries)
-
-        if not entry_lists:
-            return [], 0
-
-        total = self._calc_cartesian_total(entry_lists)
-
-        if requested >= total or total <= 500_000:
-            results = []
-            for i, combo in enumerate(itertools.product(*entry_lists)):
-                chosen = {ordered_names[j]: combo[j] for j in range(len(combo))}
-                parts = []
-                for seg in template["segments"]:
-                    seg_str = ""
-                    for box_name in seg:
-                        val = chosen[box_name]
-                        if box_name in quoted_boxes:
-                            val = f'"{val}"'
-                        seg_str += val
-                    parts.append(seg_str)
-                results.append(" ".join(parts))
-                if progress_callback and (i + 1) % 5000 == 0:
-                    progress_callback(i + 1, total)
-            if requested < total:
-                random.shuffle(results)
-                results = results[:requested]
-            return results, total
-        else:
-            return self._random_sample_template(
-                template, ordered_names, entry_lists, quoted_boxes,
-                requested, progress_callback
-            ), total
-
-    @staticmethod
-    def _random_sample_template(
-        template, ordered_names, entry_lists, quoted_boxes,
-        count, progress_callback=None,
-    ) -> List[str]:
-        results_set = set()
-        attempts = 0
-        max_attempts = count * 10
-        while len(results_set) < count and attempts < max_attempts:
-            combo = tuple(random.choice(el) for el in entry_lists)
-            chosen = {ordered_names[j]: combo[j] for j in range(len(combo))}
-            parts = []
-            for seg in template["segments"]:
-                seg_str = ""
-                for box_name in seg:
-                    val = chosen[box_name]
-                    if box_name in quoted_boxes:
-                        val = f'"{val}"'
-                    seg_str += val
-                parts.append(seg_str)
-            dork = " ".join(parts)
-            if dork not in results_set:
-                results_set.add(dork)
-                if progress_callback and len(results_set) % 2000 == 0:
-                    progress_callback(len(results_set), count)
-            attempts += 1
-        return list(results_set)
-
-    # ── Private: Mix All Mode ──
-
-    def _generate_mix_all(
-        self,
-        input_data: DorkGeneratorInput,
-        progress_callback: Optional[Callable] = None,
-    ) -> Tuple[List[str], int]:
-        usable = self._get_usable_templates(
-            input_data.templates_all, input_data.box_entries
-        )
-        if not usable:
-            return [], 0
-
-        total = sum(
-            self._calc_template_total(t, input_data.box_entries)
-            for t in usable
-        )
-        requested = input_data.requested_count
-
-        if requested >= total:
-            # Generate everything from all templates
-            all_dorks = []
-            generated = 0
-            for tmpl in usable:
-                dorks, _ = self._generate_from_template(
-                    tmpl, input_data.box_entries, total, None
-                )
-                all_dorks.extend(dorks)
-                generated += len(dorks)
-                if progress_callback:
-                    progress_callback(generated, total)
-            return all_dorks, total
-        else:
-            # Proportional allocation
-            grand_total = sum(
-                self._calc_template_total(t, input_data.box_entries)
-                for t in usable
-            )
-            all_dorks = []
-            remaining = requested
-            for i, tmpl in enumerate(usable):
-                t = self._calc_template_total(tmpl, input_data.box_entries)
-                if i == len(usable) - 1:
-                    alloc = remaining
-                else:
-                    alloc = max(1, round(requested * t / grand_total))
-                    alloc = min(alloc, remaining)
-                dorks, _ = self._generate_from_template(
-                    tmpl, input_data.box_entries, alloc, progress_callback
-                )
-                all_dorks.extend(dorks)
-                remaining -= alloc
-            return all_dorks, total
-
-    # ── Private: Helpers ──
-
-    @staticmethod
-    def _deduplicate(dorks: List[str]) -> List[str]:
-        seen = set()
-        result = []
-        for d in dorks:
-            if d not in seen:
-                seen.add(d)
-                result.append(d)
-        return result
-
-    @staticmethod
-    def _get_missing_boxes(
-        template: Dict, box_entries: Dict[str, List[str]]
-    ) -> List[str]:
-        missing = []
-        for seg in template.get("segments", []):
-            for box_name in seg:
-                entries = box_entries.get(box_name, [])
-                if not entries and box_name not in missing:
-                    missing.append(box_name)
-        return missing
-
-    @staticmethod
-    def _get_usable_templates(
-        templates: List[Dict], box_entries: Dict[str, List[str]]
-    ) -> List[Dict]:
-        usable = []
-        for tmpl in templates:
-            ok = True
-            for seg in tmpl.get("segments", []):
-                for bn in seg:
-                    if not box_entries.get(bn):
-                        ok = False
-                        break
-                if not ok:
-                    break
-            if ok:
-                usable.append(tmpl)
-        return usable
+        return {
+            "dorks": result_dorks,
+            "total_generated": len(result_dorks),
+            "total_possible": total_possible,
+            "engine": engine_id,
+            "engine_name": self.config.get_engine_display_name(engine_id),
+            "warnings": warnings,
+        }

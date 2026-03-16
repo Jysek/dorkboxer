@@ -1,0 +1,215 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>DorkForge - Advanced Dork Query Generator</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body>
+    <!-- Header -->
+    <header class="header">
+        <div class="header__brand">
+            <span class="header__icon">&#9874;</span>
+            <h1 class="header__title">DorkForge</h1>
+            <span class="header__version">v3.0</span>
+        </div>
+        <div class="header__stats">
+            <div class="stat-chip" id="statPossible">
+                <span class="stat-chip__label">Possible</span>
+                <span class="stat-chip__value" id="statPossibleVal">0</span>
+            </div>
+            <div class="stat-chip stat-chip--accent" id="statGenerated">
+                <span class="stat-chip__label">Generated</span>
+                <span class="stat-chip__value" id="statGeneratedVal">0</span>
+            </div>
+        </div>
+    </header>
+
+    <main class="layout">
+        <!-- Left Panel: Configuration -->
+        <aside class="panel panel--config">
+            <div class="panel__scroll">
+
+                <!-- Search Engine Selector -->
+                <section class="card">
+                    <h2 class="card__title">
+                        <span class="card__icon">&#127760;</span>
+                        Search Engine
+                    </h2>
+                    <div class="engine-selector" id="engineSelector">
+                        {% for eid, eng in engines.items() %}
+                        <label class="engine-option{% if eid == 'google' %} engine-option--active{% endif %}" data-engine="{{ eid }}">
+                            <input type="radio" name="engine" value="{{ eid }}" {% if eid == 'google' %}checked{% endif %}>
+                            <span class="engine-option__name">{{ eng.name }}</span>
+                            <span class="engine-option__count">{{ eng.operators|length }} ops</span>
+                        </label>
+                        {% endfor %}
+                    </div>
+                </section>
+
+                <!-- Keywords -->
+                <section class="card">
+                    <h2 class="card__title">
+                        <span class="card__icon">&#128273;</span>
+                        Keywords
+                        <span class="badge" id="keywordCount">0</span>
+                    </h2>
+                    <p class="card__hint">Enter keywords (one per line) or load from a category below.</p>
+                    <textarea class="textarea" id="keywordsInput" rows="6"
+                              placeholder="login&#10;admin panel&#10;dashboard&#10;config"></textarea>
+                    <div class="card__actions">
+                        <label class="btn btn--outline btn--sm" title="Upload keywords from .txt file">
+                            &#128194; Upload TXT
+                            <input type="file" id="keywordFileUpload" accept=".txt" hidden>
+                        </label>
+                        <button class="btn btn--outline btn--sm" id="clearKeywords" title="Clear all keywords">
+                            &#10006; Clear
+                        </button>
+                    </div>
+                    <details class="accordion" id="presetAccordion">
+                        <summary class="accordion__header">&#9733; Preset Categories</summary>
+                        <div class="accordion__body" id="presetKeywords">
+                            {% for cat_name, cat_keywords in default_keywords.items() %}
+                            <button class="preset-btn" data-keywords="{{ cat_keywords | join('||') }}">
+                                {{ cat_name }}
+                                <span class="badge badge--sm">{{ cat_keywords|length }}</span>
+                            </button>
+                            {% endfor %}
+                        </div>
+                    </details>
+                </section>
+
+                <!-- Operators -->
+                <section class="card">
+                    <h2 class="card__title">
+                        <span class="card__icon">&#9881;</span>
+                        Operators
+                        <span class="badge" id="operatorCount">0</span>
+                    </h2>
+                    <p class="card__hint">Select operators for dork generation.</p>
+                    <div class="chip-grid" id="operatorGrid">
+                        <!-- Populated by JS -->
+                    </div>
+                    <div class="card__actions">
+                        <button class="btn btn--outline btn--sm" id="selectAllOps">Select All</button>
+                        <button class="btn btn--outline btn--sm" id="deselectAllOps">Deselect All</button>
+                    </div>
+                </section>
+
+                <!-- Filetypes -->
+                <section class="card">
+                    <h2 class="card__title">
+                        <span class="card__icon">&#128196;</span>
+                        File Types
+                        <span class="badge" id="filetypeCount">0</span>
+                    </h2>
+                    <p class="card__hint">Filter by specific file extensions.</p>
+                    <div class="chip-grid chip-grid--compact" id="filetypeGrid">
+                        <!-- Populated by JS -->
+                    </div>
+                    <div class="card__actions">
+                        <button class="btn btn--outline btn--sm" id="selectAllFt">Select All</button>
+                        <button class="btn btn--outline btn--sm" id="deselectAllFt">Deselect All</button>
+                    </div>
+                </section>
+
+                <!-- Advanced Options -->
+                <section class="card">
+                    <h2 class="card__title">
+                        <span class="card__icon">&#9889;</span>
+                        Advanced Options
+                    </h2>
+                    <div class="form-group">
+                        <label class="form-label" for="siteInput">Site Restriction</label>
+                        <input type="text" class="input" id="siteInput" placeholder="example.com">
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label" for="exclusionsInput">Exclusions (one per line)</label>
+                        <textarea class="textarea textarea--sm" id="exclusionsInput" rows="2"
+                                  placeholder="facebook.com&#10;youtube.com"></textarea>
+                    </div>
+                    <div class="form-row">
+                        <label class="toggle">
+                            <input type="checkbox" id="useQuotes">
+                            <span class="toggle__slider"></span>
+                            <span class="toggle__label">Exact match (quotes)</span>
+                        </label>
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label" for="maxResults">Max Results</label>
+                        <input type="number" class="input input--sm" id="maxResults" value="100" min="1" max="10000">
+                    </div>
+                </section>
+            </div>
+
+            <!-- Generate Button -->
+            <div class="panel__footer">
+                <button class="btn btn--primary btn--lg btn--full" id="generateBtn">
+                    <span class="btn__icon">&#9654;</span>
+                    Generate Dorks
+                </button>
+            </div>
+        </aside>
+
+        <!-- Right Panel: Results -->
+        <section class="panel panel--results">
+            <!-- Results Header -->
+            <div class="results-header">
+                <div class="results-header__left">
+                    <h2 class="results-header__title">&#8803; Generated Dorks</h2>
+                    <span class="results-header__count" id="resultCount">0 dorks</span>
+                </div>
+                <div class="results-header__actions">
+                    <div class="search-box">
+                        <span class="search-box__icon">&#128269;</span>
+                        <input type="text" class="search-box__input" id="searchInput" placeholder="Filter results...">
+                    </div>
+                    <button class="btn btn--outline btn--sm" id="sortBtn" title="Sort A-Z">A&#8595;Z</button>
+                    <button class="btn btn--outline btn--sm" id="shuffleBtn" title="Shuffle">&#8693;</button>
+                </div>
+            </div>
+
+            <!-- Warnings -->
+            <div class="warnings" id="warningsContainer" style="display:none;"></div>
+
+            <!-- Results Area -->
+            <div class="results-body" id="resultsBody">
+                <div class="results-empty" id="resultsEmpty">
+                    <div class="results-empty__icon">&#9874;</div>
+                    <h3>No Dorks Generated Yet</h3>
+                    <p>Configure your options on the left and click <strong>Generate Dorks</strong>.</p>
+                </div>
+                <div class="results-list" id="resultsList" style="display:none;"></div>
+            </div>
+
+            <!-- Results Footer -->
+            <div class="results-footer">
+                <div class="results-footer__left">
+                    <button class="btn btn--blue btn--sm" id="copyAllBtn" disabled>
+                        &#10697; Copy All
+                    </button>
+                    <button class="btn btn--blue btn--sm" id="copySelectedBtn" disabled>
+                        &#9240; Copy Selected
+                    </button>
+                </div>
+                <div class="results-footer__right">
+                    <button class="btn btn--green btn--sm" id="exportTxtBtn" disabled>&#8681; TXT</button>
+                    <button class="btn btn--green btn--sm" id="exportCsvBtn" disabled>&#8681; CSV</button>
+                    <button class="btn btn--green btn--sm" id="exportJsonBtn" disabled>&#8681; JSON</button>
+                </div>
+            </div>
+        </section>
+    </main>
+
+    <!-- Loading Overlay -->
+    <div class="loading-overlay" id="loadingOverlay" style="display:none;">
+        <div class="loading-spinner">
+            <div class="spinner"></div>
+            <p>Generating dorks...</p>
+        </div>
+    </div>
+
+    <script src="{{ url_for('static', filename='js/app.js') }}"></script>
+</body>
+</html>
